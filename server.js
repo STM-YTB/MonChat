@@ -1,976 +1,619 @@
 const express = require("express");
 const http = require("http");
+const WebSocket = require("ws");
 const path = require("path");
-const crypto = require("crypto");
-const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
 /*
-|--------------------------------------------------------------------------
-| DONNÉES DE L'APPLICATION
-|--------------------------------------------------------------------------
-| Pour cette V2, les données sont conservées en mémoire.
-| Cela permet de tester facilement l'application.
-|
-| Attention : sur Render, un redémarrage du serveur effacera ces données.
-| Une prochaine V3 pourra utiliser une vraie base de données.
-|--------------------------------------------------------------------------
-*/
+ * ============================================================
+ * NOVACHAT - SERVEUR TEMPS RÉEL
+ * ============================================================
+ *
+ * Le serveur gère :
+ * - présence des utilisateurs
+ * - messages publics
+ * - messages privés
+ * - salons vocaux
+ * - signalisation WebRTC
+ * - offres / réponses WebRTC
+ * - ICE candidates
+ *
+ * Les données sont conservées en mémoire.
+ * Un redémarrage du serveur remet donc les données à zéro.
+ */
 
-const users = new Map();
-const sockets = new Map();
+const wss = new WebSocket.Server({ server });
 
-const servers = new Map([
-    [
-        "welcome",
-        {
-            id: "welcome",
-            name: "Nova Community",
-            icon: "N",
-            owner: "system",
-            members: new Set(),
-            channels: [
-                {
-                    id: "general",
-                    name: "général",
-                    type: "text"
-                },
-                {
-                    id: "entraide",
-                    name: "entraide",
-                    type: "text"
-                },
-                {
-                    id: "gaming",
-                    name: "gaming",
-                    type: "text"
-                },
-                {
-                    id: "vocal",
-                    name: "Salon vocal",
-                    type: "voice"
-                }
-            ],
-            messages: {}
-        }
-    ]
-]);
-
-const friendships = new Map();
-const friendRequests = new Map();
+const clients = new Map();
+const messages = new Map();
 const privateMessages = new Map();
 
-/* ----------------------------------------------------------------------- */
+const users = [
+  {
+    id: "alex",
+    username: "Alex",
+    displayName: "Alex",
+    status: "En ligne",
+    avatar: "A",
+    description: "J'aime coder et jouer.",
+    role: "Administrateur"
+  },
+  {
+    id: "lina",
+    username: "Lina",
+    displayName: "Lina",
+    status: "En ligne",
+    avatar: "L",
+    description: "Créatrice de contenu 🎨",
+    role: "Modératrice"
+  },
+  {
+    id: "max",
+    username: "Max",
+    displayName: "Max",
+    status: "En ligne",
+    avatar: "M",
+    description: "Toujours prêt pour une partie.",
+    role: "Membre"
+  },
+  {
+    id: "zoe",
+    username: "Zoe",
+    displayName: "Zoe",
+    status: "Absente",
+    avatar: "Z",
+    description: "Musique, jeux et café ☕",
+    role: "Membre"
+  },
+  {
+    id: "nathan",
+    username: "Nathan",
+    displayName: "Nathan",
+    status: "En ligne",
+    avatar: "N",
+    description: "Développeur full-stack.",
+    role: "Membre"
+  },
+  {
+    id: "emma",
+    username: "Emma",
+    displayName: "Emma",
+    status: "Hors ligne",
+    avatar: "E",
+    description: "Bienvenue sur NovaChat !",
+    role: "Membre"
+  },
+  {
+    id: "leo",
+    username: "Leo",
+    displayName: "Leo",
+    status: "En ligne",
+    avatar: "L",
+    description: "Gaming 🎮",
+    role: "Membre"
+  },
+  {
+    id: "chloe",
+    username: "Chloe",
+    displayName: "Chloe",
+    status: "En ligne",
+    avatar: "C",
+    description: "Je teste NovaChat.",
+    role: "Membre"
+  },
+  {
+    id: "sam",
+    username: "Sam",
+    displayName: "Sam",
+    status: "Ne pas déranger",
+    avatar: "S",
+    description: "Concentration maximale.",
+    role: "Membre"
+  },
+  {
+    id: "tom",
+    username: "Tom",
+    displayName: "Tom",
+    status: "Hors ligne",
+    avatar: "T",
+    description: "Fan de jeux indépendants.",
+    role: "Membre"
+  }
+];
 
-function id(prefix = "") {
-    return prefix + crypto.randomBytes(8).toString("hex");
+const demoMessages = [
+  {
+    id: "m1",
+    channel: "general",
+    userId: "alex",
+    username: "Alex",
+    content: "Bienvenue sur NovaChat ! 🚀",
+    time: Date.now() - 1000 * 60 * 70,
+    reactions: {
+      "🚀": ["lina", "max"],
+      "❤️": ["zoe"]
+    }
+  },
+  {
+    id: "m2",
+    channel: "general",
+    userId: "lina",
+    username: "Lina",
+    content: "L'interface commence vraiment à prendre forme 😎",
+    time: Date.now() - 1000 * 60 * 60,
+    reactions: {
+      "😎": ["alex"]
+    }
+  },
+  {
+    id: "m3",
+    channel: "general",
+    userId: "max",
+    username: "Max",
+    content: "Le vocal fonctionne aussi ?",
+    time: Date.now() - 1000 * 60 * 40,
+    reactions: {
+      "🎙️": ["alex", "lina"]
+    }
+  },
+  {
+    id: "m4",
+    channel: "general",
+    userId: "alex",
+    username: "Alex",
+    content: "Oui ! Rejoins le salon vocal et autorise ton micro.",
+    time: Date.now() - 1000 * 60 * 35,
+    reactions: {
+      "🔥": ["max", "leo"]
+    }
+  },
+  {
+    id: "m5",
+    channel: "general",
+    userId: "zoe",
+    username: "Zoe",
+    content: "On pourrait faire une soirée gaming ce soir 🎮",
+    time: Date.now() - 1000 * 60 * 20,
+    reactions: {
+      "🎮": ["leo", "max"],
+      "❤️": ["lina"]
+    }
+  }
+];
+
+messages.set("general", demoMessages);
+
+function send(ws, data) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(data));
+  }
 }
 
-function cleanName(name) {
-    return String(name || "")
-        .trim()
-        .replace(/\s+/g, " ")
-        .slice(0, 24);
+function broadcast(data, except = null) {
+  for (const client of clients.values()) {
+    if (client.ws !== except) {
+      send(client.ws, data);
+    }
+  }
 }
 
-function cleanText(text) {
-    return String(text || "").slice(0, 3000);
+function broadcastUsers() {
+  const online = [...clients.values()].map(client => ({
+    id: client.id,
+    username: client.username,
+    displayName: client.username,
+    avatar: client.username.charAt(0).toUpperCase(),
+    status: "En ligne"
+  }));
+
+  broadcast({
+    type: "presence",
+    users: online
+  });
 }
 
-function publicUser(user) {
-    if (!user) return null;
-
-    return {
-        id: user.id,
-        username: user.username,
-        status: user.status || "En ligne",
-        avatar: user.avatar,
-        bio: user.bio || "",
-        role: user.role || "Membre",
-        online: user.online !== false
-    };
+function getPrivateKey(a, b) {
+  return [a, b].sort().join(":");
 }
 
-function getOnlineUsers() {
-    return [...users.values()]
-        .filter(user => user.online)
-        .map(publicUser);
+function sendHistory(ws, channel) {
+  send(ws, {
+    type: "history",
+    channel,
+    messages: messages.get(channel) || []
+  });
 }
 
-function getServer(serverId) {
-    return servers.get(serverId);
-}
+wss.on("connection", ws => {
+  let client = null;
 
-function emitPresence() {
-    io.emit("presence:update", getOnlineUsers());
-}
+  ws.on("message", raw => {
+    let data;
 
-function sendServerList(socket) {
-    const result = [...servers.values()].map(s => ({
-        id: s.id,
-        name: s.name,
-        icon: s.icon,
-        owner: s.owner,
-        channels: s.channels.map(c => ({
-            id: c.id,
-            name: c.name,
-            type: c.type
-        })),
-        memberCount: s.members.size
-    }));
-
-    socket.emit("servers:list", result);
-}
-
-function sendMembers(serverId) {
-    const s = getServer(serverId);
-    if (!s) return;
-
-    const members = [...s.members]
-        .map(uid => users.get(uid))
-        .filter(Boolean)
-        .map(publicUser);
-
-    io.to(`server:${serverId}`).emit("server:members", {
-        serverId,
-        members
-    });
-}
-
-/* -----------------------------------------------------------------------
-   API
------------------------------------------------------------------------- */
-
-app.get("/api/health", (req, res) => {
-    res.json({
-        ok: true,
-        users: [...users.values()].filter(u => u.online).length,
-        servers: servers.size
-    });
-});
-
-/* -----------------------------------------------------------------------
-   SOCKET.IO
------------------------------------------------------------------------- */
-
-io.on("connection", socket => {
-
-    console.log("Connexion :", socket.id);
+    try {
+      data = JSON.parse(raw.toString());
+    } catch {
+      return;
+    }
 
     /*
-    |--------------------------------------------------------------------------
-    | CONNEXION UTILISATEUR
-    |--------------------------------------------------------------------------
-    */
+     * --------------------------------------------------------
+     * CONNEXION
+     * --------------------------------------------------------
+     */
 
-    socket.on("user:login", data => {
-        const username = cleanName(data?.username);
+    if (data.type === "login") {
+      const username =
+        String(data.username || "Utilisateur")
+          .trim()
+          .slice(0, 24);
 
-        if (!username) {
-            socket.emit("user:error", "Choisis un nom d'utilisateur.");
-            return;
+      const id =
+        `${username.toLowerCase().replace(/[^a-z0-9]/g, "")}-${Math.random()
+          .toString(36)
+          .slice(2, 7)}`;
+
+      client = {
+        id,
+        username,
+        ws,
+        voiceRoom: null
+      };
+
+      clients.set(id, client);
+
+      send(ws, {
+        type: "login-success",
+        user: {
+          id,
+          username,
+          avatar: username.charAt(0).toUpperCase()
         }
+      });
 
-        let user = [...users.values()].find(
-            u => u.username.toLowerCase() === username.toLowerCase()
-        );
+      sendHistory(ws, "general");
+      broadcastUsers();
 
-        if (!user) {
-            user = {
-                id: id("u_"),
-                username,
-                avatar: username.charAt(0).toUpperCase(),
-                status: "En ligne",
-                bio: "Bienvenue sur Nova.",
-                role: "Membre",
-                online: true,
-                socketId: socket.id
-            };
+      return;
+    }
 
-            users.set(user.id, user);
-        } else {
-            user.online = true;
-            user.socketId = socket.id;
-        }
-
-        sockets.set(socket.id, user.id);
-
-        socket.data.userId = user.id;
-
-        socket.emit("user:ready", publicUser(user));
-
-        sendServerList(socket);
-
-        const joinedServers = [];
-
-        for (const s of servers.values()) {
-            if (s.members.has(user.id)) {
-                joinedServers.push(s.id);
-            }
-        }
-
-        /*
-        Si nouvel utilisateur, on l'ajoute au serveur d'accueil.
-        */
-        if (joinedServers.length === 0) {
-            const welcome = getServer("welcome");
-
-            if (welcome) {
-                welcome.members.add(user.id);
-                joinedServers.push(welcome.id);
-            }
-        }
-
-        for (const serverId of joinedServers) {
-            socket.join(`server:${serverId}`);
-        }
-
-        socket.emit("user:servers", joinedServers);
-
-        emitPresence();
-
-        for (const serverId of joinedServers) {
-            sendMembers(serverId);
-        }
-
-        console.log(`${username} est connecté`);
-    });
+    if (!client) return;
 
     /*
-    |--------------------------------------------------------------------------
-    | PROFIL
-    |--------------------------------------------------------------------------
-    */
+     * --------------------------------------------------------
+     * CHAT PUBLIC
+     * --------------------------------------------------------
+     */
 
-    socket.on("profile:update", data => {
-        const user = users.get(socket.data.userId);
-        if (!user) return;
+    if (data.type === "message") {
+      const channel = String(data.channel || "general");
+      const content = String(data.content || "").trim();
 
-        if (data.username) {
-            const username = cleanName(data.username);
+      if (!content) return;
 
-            const exists = [...users.values()].some(
-                u =>
-                    u.id !== user.id &&
-                    u.username.toLowerCase() === username.toLowerCase()
-            );
+      const message = {
+        id: "msg-" + Date.now() + "-" + Math.random().toString(36).slice(2),
+        channel,
+        userId: client.id,
+        username: client.username,
+        content: content.slice(0, 4000),
+        time: Date.now(),
+        reactions: {}
+      };
 
-            if (exists) {
-                socket.emit("profile:error", "Ce pseudo est déjà utilisé.");
-                return;
-            }
+      if (!messages.has(channel)) {
+        messages.set(channel, []);
+      }
 
-            if (username) {
-                user.username = username;
-                user.avatar = username.charAt(0).toUpperCase();
-            }
-        }
+      messages.get(channel).push(message);
 
-        if (typeof data.bio === "string") {
-            user.bio = data.bio.slice(0, 160);
-        }
+      if (messages.get(channel).length > 200) {
+        messages.get(channel).shift();
+      }
 
-        if (typeof data.status === "string") {
-            user.status = data.status.slice(0, 60);
-        }
+      broadcast({
+        type: "new-message",
+        message
+      });
 
-        socket.emit("profile:updated", publicUser(user));
-        emitPresence();
-    });
+      return;
+    }
 
     /*
-    |--------------------------------------------------------------------------
-    | SERVEURS
-    |--------------------------------------------------------------------------
-    */
+     * --------------------------------------------------------
+     * RÉACTION
+     * --------------------------------------------------------
+     */
 
-    socket.on("server:create", data => {
-        const user = users.get(socket.data.userId);
-        if (!user) return;
+    if (data.type === "reaction") {
+      const channel = String(data.channel || "general");
+      const messageId = String(data.messageId || "");
+      const emoji = String(data.emoji || "");
 
-        const name = cleanName(data?.name);
+      const channelMessages = messages.get(channel) || [];
+      const message = channelMessages.find(m => m.id === messageId);
 
-        if (!name) {
-            socket.emit("app:error", "Donne un nom à ton serveur.");
-            return;
-        }
+      if (!message || !emoji) return;
 
-        const serverId = id("server_");
+      if (!message.reactions) {
+        message.reactions = {};
+      }
 
-        const newServer = {
-            id: serverId,
-            name,
-            icon: name.charAt(0).toUpperCase(),
-            owner: user.id,
-            members: new Set([user.id]),
-            channels: [
-                {
-                    id: id("channel_"),
-                    name: "général",
-                    type: "text"
-                },
-                {
-                    id: id("channel_"),
-                    name: "Vocal",
-                    type: "voice"
-                }
-            ],
-            messages: {}
-        };
+      if (!message.reactions[emoji]) {
+        message.reactions[emoji] = [];
+      }
 
-        servers.set(serverId, newServer);
+      const usersReacted = message.reactions[emoji];
+      const index = usersReacted.indexOf(client.id);
 
-        socket.join(`server:${serverId}`);
+      if (index >= 0) {
+        usersReacted.splice(index, 1);
+      } else {
+        usersReacted.push(client.id);
+      }
 
-        socket.emit("server:created", {
-            id: serverId,
-            name: newServer.name,
-            icon: newServer.icon
-        });
+      broadcast({
+        type: "reaction-update",
+        channel,
+        messageId,
+        reactions: message.reactions
+      });
 
-        sendServerList(socket);
-        sendMembers(serverId);
-    });
-
-    socket.on("server:join", data => {
-        const user = users.get(socket.data.userId);
-        if (!user) return;
-
-        const serverId = data?.serverId;
-        const s = getServer(serverId);
-
-        if (!s) {
-            socket.emit("app:error", "Serveur introuvable.");
-            return;
-        }
-
-        s.members.add(user.id);
-        socket.join(`server:${serverId}`);
-
-        socket.emit("server:joined", {
-            serverId
-        });
-
-        sendServerList(socket);
-        sendMembers(serverId);
-    });
-
-    socket.on("server:invite", data => {
-        const user = users.get(socket.data.userId);
-        const s = getServer(data?.serverId);
-
-        if (!user || !s) return;
-
-        const invite = {
-            code: crypto
-                .randomBytes(4)
-                .toString("hex")
-                .toUpperCase(),
-            serverId: s.id,
-            serverName: s.name,
-            from: user.username
-        };
-
-        socket.emit("server:inviteCreated", invite);
-    });
-
-    socket.on("server:joinInvite", data => {
-        const user = users.get(socket.data.userId);
-        if (!user) return;
-
-        const code = String(data?.code || "").trim().toUpperCase();
-
-        /*
-        Dans cette version, le code est généré côté client/serveur
-        et envoyé à l'utilisateur.
-        Pour une V3, les invitations seront stockées.
-        */
-
-        socket.emit(
-            "app:info",
-            "Les codes d'invitation temporaires seront améliorés avec une base de données dans la prochaine version."
-        );
-    });
+      return;
+    }
 
     /*
-    |--------------------------------------------------------------------------
-    | SALONS
-    |--------------------------------------------------------------------------
-    */
+     * --------------------------------------------------------
+     * SUPPRESSION
+     * --------------------------------------------------------
+     */
 
-    socket.on("channel:create", data => {
-        const user = users.get(socket.data.userId);
-        const s = getServer(data?.serverId);
+    if (data.type === "delete-message") {
+      const channel = String(data.channel || "general");
+      const messageId = String(data.messageId || "");
 
-        if (!user || !s) return;
+      const channelMessages = messages.get(channel) || [];
+      const index = channelMessages.findIndex(m => m.id === messageId);
 
-        if (s.owner !== user.id) {
-            socket.emit("app:error", "Seul le propriétaire peut créer un salon.");
-            return;
-        }
+      if (index === -1) return;
 
-        const name = cleanName(data?.name);
+      if (channelMessages[index].userId !== client.id) {
+        return;
+      }
 
-        if (!name) return;
+      channelMessages.splice(index, 1);
 
-        const channel = {
-            id: id("channel_"),
-            name,
-            type: data?.type === "voice" ? "voice" : "text"
-        };
+      broadcast({
+        type: "message-deleted",
+        channel,
+        messageId
+      });
 
-        s.channels.push(channel);
-
-        io.to(`server:${s.id}`).emit("channel:created", {
-            serverId: s.id,
-            channel
-        });
-
-        sendServerList(socket);
-    });
+      return;
+    }
 
     /*
-    |--------------------------------------------------------------------------
-    | MESSAGES
-    |--------------------------------------------------------------------------
-    */
+     * --------------------------------------------------------
+     * MODIFICATION
+     * --------------------------------------------------------
+     */
 
-    socket.on("channel:join", data => {
-        const user = users.get(socket.data.userId);
-        const s = getServer(data?.serverId);
+    if (data.type === "edit-message") {
+      const channel = String(data.channel || "general");
+      const messageId = String(data.messageId || "");
+      const content = String(data.content || "").trim();
 
-        if (!user || !s || !s.members.has(user.id)) return;
+      const channelMessages = messages.get(channel) || [];
+      const message = channelMessages.find(m => m.id === messageId);
 
-        const channel = s.channels.find(c => c.id === data.channelId);
+      if (!message || message.userId !== client.id || !content) {
+        return;
+      }
 
-        if (!channel) return;
+      message.content = content.slice(0, 4000);
+      message.edited = true;
 
-        if (!s.messages[channel.id]) {
-            s.messages[channel.id] = [];
-        }
+      broadcast({
+        type: "message-edited",
+        channel,
+        message
+      });
 
-        socket.emit("messages:list", {
-            serverId: s.id,
-            channelId: channel.id,
-            messages: s.messages[channel.id]
-        });
-    });
-
-    socket.on("message:send", data => {
-        const user = users.get(socket.data.userId);
-        const s = getServer(data?.serverId);
-
-        if (!user || !s || !s.members.has(user.id)) return;
-
-        const channel = s.channels.find(c => c.id === data.channelId);
-
-        if (!channel || channel.type !== "text") return;
-
-        const content = cleanText(data.content);
-
-        if (!content.trim()) return;
-
-        if (!s.messages[channel.id]) {
-            s.messages[channel.id] = [];
-        }
-
-        const message = {
-            id: id("msg_"),
-            userId: user.id,
-            username: user.username,
-            avatar: user.avatar,
-            content,
-            timestamp: Date.now(),
-            reactions: {}
-        };
-
-        s.messages[channel.id].push(message);
-
-        if (s.messages[channel.id].length > 300) {
-            s.messages[channel.id].shift();
-        }
-
-        io.to(`server:${s.id}`).emit("message:new", {
-            serverId: s.id,
-            channelId: channel.id,
-            message
-        });
-    });
-
-    socket.on("message:edit", data => {
-        const user = users.get(socket.data.userId);
-        const s = getServer(data?.serverId);
-
-        if (!user || !s) return;
-
-        const list = s.messages[data.channelId];
-
-        if (!list) return;
-
-        const message = list.find(m => m.id === data.messageId);
-
-        if (!message || message.userId !== user.id) return;
-
-        const content = cleanText(data.content);
-
-        if (!content.trim()) return;
-
-        message.content = content;
-        message.edited = true;
-
-        io.to(`server:${s.id}`).emit("message:updated", {
-            serverId: s.id,
-            channelId: data.channelId,
-            message
-        });
-    });
-
-    socket.on("message:delete", data => {
-        const user = users.get(socket.data.userId);
-        const s = getServer(data?.serverId);
-
-        if (!user || !s) return;
-
-        const list = s.messages[data.channelId];
-
-        if (!list) return;
-
-        const index = list.findIndex(m => m.id === data.messageId);
-
-        if (index === -1) return;
-
-        if (list[index].userId !== user.id) return;
-
-        list.splice(index, 1);
-
-        io.to(`server:${s.id}`).emit("message:deleted", {
-            serverId: s.id,
-            channelId: data.channelId,
-            messageId: data.messageId
-        });
-    });
-
-    socket.on("message:reaction", data => {
-        const user = users.get(socket.data.userId);
-        const s = getServer(data?.serverId);
-
-        if (!user || !s) return;
-
-        const list = s.messages[data.channelId];
-        if (!list) return;
-
-        const message = list.find(m => m.id === data.messageId);
-        if (!message) return;
-
-        const emoji = String(data.emoji || "❤️");
-
-        if (!message.reactions[emoji]) {
-            message.reactions[emoji] = [];
-        }
-
-        const usersReacted = message.reactions[emoji];
-
-        const index = usersReacted.indexOf(user.id);
-
-        if (index === -1) {
-            usersReacted.push(user.id);
-        } else {
-            usersReacted.splice(index, 1);
-        }
-
-        if (usersReacted.length === 0) {
-            delete message.reactions[emoji];
-        }
-
-        io.to(`server:${s.id}`).emit("message:reactionUpdated", {
-            serverId: s.id,
-            channelId: data.channelId,
-            messageId: data.messageId,
-            reactions: message.reactions
-        });
-    });
+      return;
+    }
 
     /*
-    |--------------------------------------------------------------------------
-    | AMIS
-    |--------------------------------------------------------------------------
-    */
+     * --------------------------------------------------------
+     * MESSAGES PRIVÉS
+     * --------------------------------------------------------
+     */
 
-    socket.on("friends:search", data => {
-        const query = String(data?.query || "")
-            .trim()
-            .toLowerCase();
+    if (data.type === "private-message") {
+      const receiverId = String(data.receiverId || "");
+      const content = String(data.content || "").trim();
 
-        const currentUser = users.get(socket.data.userId);
+      if (!receiverId || !content) return;
 
-        if (!currentUser || !query) {
-            socket.emit("friends:searchResults", []);
-            return;
-        }
+      const receiver = clients.get(receiverId);
 
-        const results = [...users.values()]
-            .filter(
-                u =>
-                    u.id !== currentUser.id &&
-                    u.username.toLowerCase().includes(query)
-            )
-            .slice(0, 20)
-            .map(publicUser);
+      if (!receiver) {
+        send(ws, {
+          type: "error-message",
+          message: "Cette personne n'est pas actuellement connectée."
+        });
+        return;
+      }
 
-        socket.emit("friends:searchResults", results);
-    });
+      const key = getPrivateKey(client.id, receiverId);
 
-    socket.on("friends:request", data => {
-        const from = users.get(socket.data.userId);
-        const to = users.get(data?.userId);
+      if (!privateMessages.has(key)) {
+        privateMessages.set(key, []);
+      }
 
-        if (!from || !to || from.id === to.id) return;
+      const message = {
+        id: "dm-" + Date.now() + Math.random().toString(36).slice(2),
+        senderId: client.id,
+        senderName: client.username,
+        receiverId,
+        content: content.slice(0, 4000),
+        time: Date.now()
+      };
 
-        if (!friendRequests.has(to.id)) {
-            friendRequests.set(to.id, []);
-        }
+      privateMessages.get(key).push(message);
 
-        const requests = friendRequests.get(to.id);
+      send(receiver.ws, {
+        type: "private-message",
+        message
+      });
 
+      send(ws, {
+        type: "private-message",
+        message
+      });
+
+      return;
+    }
+
+    if (data.type === "private-history") {
+      const receiverId = String(data.receiverId || "");
+      const key = getPrivateKey(client.id, receiverId);
+
+      send(ws, {
+        type: "private-history",
+        receiverId,
+        messages: privateMessages.get(key) || []
+      });
+
+      return;
+    }
+
+    /*
+     * --------------------------------------------------------
+     * ENTRÉE DANS UN SALON VOCAL
+     * --------------------------------------------------------
+     */
+
+    if (data.type === "voice-join") {
+      const room = String(data.room || "general");
+
+      if (client.voiceRoom) {
+        client.voiceRoom = null;
+      }
+
+      client.voiceRoom = room;
+
+      const peers = [];
+
+      for (const other of clients.values()) {
         if (
-            requests.some(r => r.from === from.id) ||
-            isFriend(from.id, to.id)
+          other.id !== client.id &&
+          other.voiceRoom === room
         ) {
-            return;
+          peers.push({
+            id: other.id,
+            username: other.username
+          });
         }
+      }
 
-        requests.push({
-            id: id("request_"),
-            from: from.id,
-            fromUsername: from.username,
-            timestamp: Date.now()
-        });
+      send(ws, {
+        type: "voice-peers",
+        room,
+        peers
+      });
 
-        const targetSocket = to.socketId;
+      broadcast(
+        {
+          type: "voice-user-joined",
+          room,
+          user: {
+            id: client.id,
+            username: client.username
+          }
+        },
+        ws
+      );
 
-        if (targetSocket) {
-            io.to(targetSocket).emit("friends:requestReceived", {
-                from: publicUser(from)
-            });
-        }
-
-        socket.emit("friends:requestSent", {
-            userId: to.id
-        });
-    });
-
-    socket.on("friends:requests", () => {
-        const user = users.get(socket.data.userId);
-        if (!user) return;
-
-        const requests = friendRequests.get(user.id) || [];
-
-        socket.emit(
-            "friends:requests",
-            requests.map(r => ({
-                ...r,
-                user: publicUser(users.get(r.from))
-            }))
-        );
-    });
-
-    socket.on("friends:accept", data => {
-        const user = users.get(socket.data.userId);
-        const request = friendRequests.get(user?.id)?.find(
-            r => r.id === data?.requestId
-        );
-
-        if (!user || !request) return;
-
-        const other = users.get(request.from);
-
-        if (!other) return;
-
-        addFriend(user.id, other.id);
-
-        const list = friendRequests.get(user.id) || [];
-
-        friendRequests.set(
-            user.id,
-            list.filter(r => r.id !== request.id)
-        );
-
-        socket.emit("friends:accepted", {
-            user: publicUser(other)
-        });
-
-        if (other.socketId) {
-            io.to(other.socketId).emit("friends:accepted", {
-                user: publicUser(user)
-            });
-        }
-
-        emitFriendLists(user.id, other.id);
-    });
-
-    socket.on("friends:remove", data => {
-        const user = users.get(socket.data.userId);
-
-        if (!user) return;
-
-        removeFriend(user.id, data?.userId);
-
-        emitFriendLists(user.id, data?.userId);
-    });
+      return;
+    }
 
     /*
-    |--------------------------------------------------------------------------
-    | MESSAGES PRIVÉS
-    |--------------------------------------------------------------------------
-    */
+     * --------------------------------------------------------
+     * QUITTER LE VOCAL
+     * --------------------------------------------------------
+     */
 
-    socket.on("dm:send", data => {
-        const from = users.get(socket.data.userId);
-        const to = users.get(data?.userId);
+    if (data.type === "voice-leave") {
+      const room = client.voiceRoom;
 
-        if (!from || !to) return;
+      if (!room) return;
 
-        const content = cleanText(data.content);
+      client.voiceRoom = null;
 
-        if (!content.trim()) return;
+      broadcast({
+        type: "voice-user-left",
+        room,
+        userId: client.id
+      });
 
-        const key = dmKey(from.id, to.id);
-
-        if (!privateMessages.has(key)) {
-            privateMessages.set(key, []);
-        }
-
-        const message = {
-            id: id("dm_"),
-            from: from.id,
-            to: to.id,
-            username: from.username,
-            content,
-            timestamp: Date.now()
-        };
-
-        privateMessages.get(key).push(message);
-
-        socket.emit("dm:new", message);
-
-        if (to.socketId) {
-            io.to(to.socketId).emit("dm:new", message);
-        }
-    });
-
-    socket.on("dm:history", data => {
-        const user = users.get(socket.data.userId);
-        const other = users.get(data?.userId);
-
-        if (!user || !other) return;
-
-        const key = dmKey(user.id, other.id);
-
-        socket.emit("dm:history", {
-            userId: other.id,
-            messages: privateMessages.get(key) || []
-        });
-    });
+      return;
+    }
 
     /*
-    |--------------------------------------------------------------------------
-    | WEBRTC
-    |--------------------------------------------------------------------------
-    |
-    | Le serveur ne transporte PAS la vidéo.
-    | Il sert uniquement de signalisation.
-    |--------------------------------------------------------------------------
-    */
+     * --------------------------------------------------------
+     * SIGNALISATION WEBRTC
+     * --------------------------------------------------------
+     */
 
-    socket.on("call:join", data => {
-        const user = users.get(socket.data.userId);
+    if (
+      data.type === "webrtc-offer" ||
+      data.type === "webrtc-answer" ||
+      data.type === "webrtc-ice"
+    ) {
+      const targetId = String(data.targetId || "");
+      const target = clients.get(targetId);
 
-        if (!user) return;
+      if (!target) return;
 
-        const room = String(data?.room || "");
+      send(target.ws, {
+        ...data,
+        senderId: client.id,
+        senderName: client.username
+      });
 
-        if (!room) return;
+      return;
+    }
+  });
 
-        socket.join(`call:${room}`);
+  ws.on("close", () => {
+    if (!client) return;
 
-        socket.to(`call:${room}`).emit("call:userJoined", {
-            user: publicUser(user),
-            socketId: socket.id
-        });
+    const oldRoom = client.voiceRoom;
 
-        const roomSockets = io.sockets.adapter.rooms.get(`call:${room}`);
+    clients.delete(client.id);
 
-        const existing = [];
+    if (oldRoom) {
+      broadcast({
+        type: "voice-user-left",
+        room: oldRoom,
+        userId: client.id
+      });
+    }
 
-        if (roomSockets) {
-            for (const socketId of roomSockets) {
-                if (socketId === socket.id) continue;
-
-                const uid = sockets.get(socketId);
-
-                if (uid) {
-                    existing.push({
-                        socketId,
-                        user: publicUser(users.get(uid))
-                    });
-                }
-            }
-        }
-
-        socket.emit("call:existingUsers", existing);
-    });
-
-    socket.on("call:offer", data => {
-        if (!data?.target) return;
-
-        io.to(data.target).emit("call:offer", {
-            from: socket.id,
-            offer: data.offer
-        });
-    });
-
-    socket.on("call:answer", data => {
-        if (!data?.target) return;
-
-        io.to(data.target).emit("call:answer", {
-            from: socket.id,
-            answer: data.answer
-        });
-    });
-
-    socket.on("call:ice", data => {
-        if (!data?.target) return;
-
-        io.to(data.target).emit("call:ice", {
-            from: socket.id,
-            candidate: data.candidate
-        });
-    });
-
-    socket.on("call:leave", data => {
-        const room = String(data?.room || "");
-
-        if (room) {
-            socket.leave(`call:${room}`);
-
-            socket.to(`call:${room}`).emit("call:userLeft", {
-                socketId: socket.id
-            });
-        }
-    });
-
-    /*
-    |--------------------------------------------------------------------------
-    | DÉCONNEXION
-    |--------------------------------------------------------------------------
-    */
-
-    socket.on("disconnect", () => {
-        const userId = sockets.get(socket.id);
-
-        if (userId) {
-            const user = users.get(userId);
-
-            if (user) {
-                user.online = false;
-                user.socketId = null;
-            }
-
-            sockets.delete(socket.id);
-
-            emitPresence();
-
-            for (const s of servers.values()) {
-                if (s.members.has(userId)) {
-                    sendMembers(s.id);
-                }
-            }
-
-            console.log(
-                `${user?.username || "Utilisateur"} est déconnecté`
-            );
-        }
-    });
+    broadcastUsers();
+  });
 });
-
-/* -----------------------------------------------------------------------
-   HELPERS AMIS
------------------------------------------------------------------------- */
-
-function friendshipKey(a, b) {
-    return [a, b].sort().join(":");
-}
-
-function isFriend(a, b) {
-    return friendships.has(friendshipKey(a, b));
-}
-
-function addFriend(a, b) {
-    friendships.set(friendshipKey(a, b), true);
-}
-
-function removeFriend(a, b) {
-    friendships.delete(friendshipKey(a, b));
-}
-
-function getFriends(userId) {
-    const result = [];
-
-    for (const key of friendships.keys()) {
-        const [a, b] = key.split(":");
-
-        if (a === userId) {
-            const user = users.get(b);
-            if (user) result.push(publicUser(user));
-        }
-
-        if (b === userId) {
-            const user = users.get(a);
-            if (user) result.push(publicUser(user));
-        }
-    }
-
-    return result;
-}
-
-function emitFriendLists(a, b) {
-    const userA = users.get(a);
-    const userB = users.get(b);
-
-    if (userA?.socketId) {
-        io.to(userA.socketId).emit(
-            "friends:list",
-            getFriends(a)
-        );
-    }
-
-    if (userB?.socketId) {
-        io.to(userB.socketId).emit(
-            "friends:list",
-            getFriends(b)
-        );
-    }
-}
-
-function dmKey(a, b) {
-    return [a, b].sort().join(":");
-}
-
-/* ----------------------------------------------------------------------- */
 
 server.listen(PORT, "0.0.0.0", () => {
-    console.log("");
-    console.log("====================================");
-    console.log("       NOVACHAT SERVER ONLINE");
-    console.log("====================================");
-    console.log(`Port : ${PORT}`);
-    console.log("");
+  console.log(`NovaChat lancé sur le port ${PORT}`);
 });
