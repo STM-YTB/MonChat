@@ -7,62 +7,49 @@ const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-
-const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
+const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
 
+const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "data");
 const DATA_FILE = path.join(DATA_DIR, "database.json");
+
+app.use(express.json({ limit: "8mb" }));
+app.use(express.urlencoded({ extended: true, limit: "8mb" }));
+app.use(express.static(PUBLIC_DIR));
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const defaultDatabase = {
-  users: [],
-  servers: [],
-  messages: [],
-  friendships: []
-};
+function defaultDatabase() {
+  return {
+    users: [],
+    servers: [],
+    messages: [],
+    friendships: []
+  };
+}
 
 function loadDatabase() {
   try {
     if (!fs.existsSync(DATA_FILE)) {
-      fs.writeFileSync(
-        DATA_FILE,
-        JSON.stringify(defaultDatabase, null, 2),
-        "utf8"
-      );
-      return JSON.parse(JSON.stringify(defaultDatabase));
+      const db = defaultDatabase();
+      saveDatabase(db);
+      return db;
     }
 
-    const content = fs.readFileSync(DATA_FILE, "utf8");
+    const raw = fs.readFileSync(DATA_FILE, "utf8");
 
-    if (!content.trim()) {
-      return JSON.parse(JSON.stringify(defaultDatabase));
+    if (!raw.trim()) {
+      return defaultDatabase();
     }
 
-    const database = JSON.parse(content);
-
-    database.users = Array.isArray(database.users) ? database.users : [];
-    database.servers = Array.isArray(database.servers) ? database.servers : [];
-    database.messages = Array.isArray(database.messages)
-      ? database.messages
-      : [];
-    database.friendships = Array.isArray(database.friendships)
-      ? database.friendships
-      : [];
-
-    return database;
+    return JSON.parse(raw);
   } catch (error) {
     console.error("Erreur lecture database:", error);
-    return JSON.parse(JSON.stringify(defaultDatabase));
+    return defaultDatabase();
   }
 }
 
@@ -70,7 +57,11 @@ let db = loadDatabase();
 
 function saveDatabase() {
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2), "utf8");
+    fs.writeFileSync(
+      DATA_FILE,
+      JSON.stringify(db, null, 2),
+      "utf8"
+    );
   } catch (error) {
     console.error("Erreur sauvegarde database:", error);
   }
@@ -80,71 +71,19 @@ function id() {
   return crypto.randomUUID();
 }
 
-function cleanText(value, max = 1000) {
-  if (typeof value !== "string") {
-    return "";
-  }
-
-  return value.trim().slice(0, max);
-}
-
-function normalizeUsername(username) {
-  return cleanText(username, 32).toLowerCase();
-}
-
 function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString("hex");
-
-  const hash = crypto
-    .pbkdf2Sync(
-      String(password),
-      salt,
-      100000,
-      64,
-      "sha512"
-    )
-    .toString("hex");
-
-  return salt + ":" + hash;
+  return crypto
+    .createHash("sha256")
+    .update(String(password))
+    .digest("hex");
 }
 
-function verifyPassword(password, storedPassword) {
-  try {
-    const parts = String(storedPassword).split(":");
-
-    if (parts.length !== 2) {
-      return false;
-    }
-
-    const salt = parts[0];
-    const originalHash = parts[1];
-
-    const hash = crypto
-      .pbkdf2Sync(
-        String(password),
-        salt,
-        100000,
-        64,
-        "sha512"
-      )
-      .toString("hex");
-
-    return crypto.timingSafeEqual(
-      Buffer.from(hash, "hex"),
-      Buffer.from(originalHash, "hex")
-    );
-  } catch {
-    return false;
-  }
-}
-
-function publicUser(user) {
-  if (!user) {
-    return null;
-  }
+function cleanUser(user) {
+  if (!user) return null;
 
   return {
     id: user.id,
+    email: user.email,
     username: user.username,
     displayName: user.displayName,
     avatar: user.avatar || "",
@@ -152,147 +91,308 @@ function publicUser(user) {
   };
 }
 
-function findUserById(userId) {
-  return db.users.find((user) => user.id === userId);
+function getUser(userId) {
+  return db.users.find(user => user.id === userId);
 }
 
 function findUserByUsername(username) {
-  const normalized = normalizeUsername(username);
+  const wanted = String(username || "")
+    .trim()
+    .toLowerCase();
 
   return db.users.find(
-    (user) => normalizeUsername(user.username) === normalized
+    user =>
+      user.username.toLowerCase() === wanted
   );
 }
 
-function getServerForUser(serverId, userId) {
-  return db.servers.find(
-    (server) =>
-      server.id === serverId &&
-      Array.isArray(server.members) &&
-      server.members.includes(userId)
+function findUserByLogin(login) {
+  const wanted = String(login || "")
+    .trim()
+    .toLowerCase();
+
+  return db.users.find(
+    user =>
+      user.username.toLowerCase() === wanted ||
+      user.email.toLowerCase() === wanted
   );
 }
 
 function getFriends(userId) {
-  const friendships = db.friendships.filter(
-    (friendship) =>
-      friendship.status === "accepted" &&
-      (friendship.user1 === userId || friendship.user2 === userId)
+  const relations = db.friendships.filter(
+    relation =>
+      relation.userId === userId ||
+      relation.friendId === userId
   );
 
-  return friendships
-    .map((friendship) => {
-      const friendId =
-        friendship.user1 === userId
-          ? friendship.user2
-          : friendship.user1;
-
-      return publicUser(findUserById(friendId));
-    })
-    .filter(Boolean);
-}
-
-function friendshipExists(user1, user2) {
-  return db.friendships.some(
-    (friendship) =>
-      (friendship.user1 === user1 && friendship.user2 === user2) ||
-      (friendship.user1 === user2 && friendship.user2 === user1)
+  const ids = relations.map(relation =>
+    relation.userId === userId
+      ? relation.friendId
+      : relation.userId
   );
+
+  return ids
+    .map(getUser)
+    .filter(Boolean)
+    .map(cleanUser);
 }
 
-function serverPublic(serverData) {
+function getServerForUser(serverId, userId) {
+  const serverData = db.servers.find(
+    serverItem => serverItem.id === serverId
+  );
+
+  if (!serverData) return null;
+
+  if (!serverData.members.includes(userId)) {
+    return null;
+  }
+
+  return serverData;
+}
+
+function publicServer(serverData) {
   return {
     id: serverData.id,
     name: serverData.name,
     icon: serverData.icon || "",
     ownerId: serverData.ownerId,
-    members: serverData.members || [],
-    channels: serverData.channels || [],
-    createdAt: serverData.createdAt
+    members: serverData.members,
+    channels: serverData.channels
   };
 }
 
-function makeDefaultChannels() {
-  return [
-    {
-      id: id(),
-      name: "general",
-      type: "text",
-      position: 0
-    },
-    {
-      id: id(),
-      name: "general",
-      type: "voice",
-      position: 1
-    }
-  ];
+function makeServer(name, icon, ownerId) {
+  const serverId = id();
+
+  return {
+    id: serverId,
+    name,
+    icon: icon || "",
+    ownerId,
+    members: [ownerId],
+    channels: [
+      {
+        id: id(),
+        name: "général",
+        type: "text"
+      },
+      {
+        id: id(),
+        name: "Général",
+        type: "voice"
+      }
+    ],
+    createdAt: Date.now()
+  };
 }
 
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+function getServersForUser(userId) {
+  return db.servers
+    .filter(serverItem =>
+      serverItem.members.includes(userId)
+    )
+    .map(publicServer);
+}
 
-app.use(express.static(path.join(__dirname, "public")));
+function getMessagesForChannel(channelId) {
+  return db.messages
+    .filter(message =>
+      message.channelId === channelId
+    )
+    .sort(
+      (a, b) =>
+        a.createdAt - b.createdAt
+    );
+}
 
-app.get("/api/status", (req, res) => {
+function getDmMessages(userA, userB) {
+  return db.messages
+    .filter(message =>
+      message.type === "dm" &&
+      (
+        (
+          message.from === userA &&
+          message.to === userB
+        ) ||
+        (
+          message.from === userB &&
+          message.to === userA
+        )
+      )
+    )
+    .sort(
+      (a, b) =>
+        a.createdAt - b.createdAt
+    );
+}
+
+function messageForClient(message) {
+  const user = getUser(message.from);
+
+  return {
+    ...message,
+    displayName: user
+      ? user.displayName
+      : "Utilisateur",
+    username: user
+      ? user.username
+      : "",
+    avatar: user
+      ? user.avatar || ""
+      : ""
+  };
+}
+
+const onlineUsers = new Map();
+const voiceRooms = new Map();
+
+function sendVoiceUsers(channelId) {
+  const room = voiceRooms.get(channelId);
+
+  if (!room) {
+    return;
+  }
+
+  const users = [];
+
+  for (const socketId of room) {
+    const info = onlineUsers.get(socketId);
+
+    if (!info) continue;
+
+    const user = getUser(info.userId);
+
+    if (!user) continue;
+
+    users.push({
+      socketId,
+      user: cleanUser(user)
+    });
+  }
+
+  io.to("voice:" + channelId).emit(
+    "voice_users",
+    {
+      channelId,
+      users
+    }
+  );
+}
+
+function leaveVoice(socket) {
+  const currentVoice =
+    socket.data.voiceChannelId;
+
+  if (!currentVoice) {
+    return;
+  }
+
+  const room = voiceRooms.get(
+    currentVoice
+  );
+
+  if (room) {
+    room.delete(socket.id);
+
+    if (room.size === 0) {
+      voiceRooms.delete(currentVoice);
+    }
+  }
+
+  socket.leave(
+    "voice:" + currentVoice
+  );
+
+  socket.to(
+    "voice:" + currentVoice
+  ).emit(
+    "voice_user_left",
+    {
+      socketId: socket.id
+    }
+  );
+
+  sendVoiceUsers(currentVoice);
+
+  socket.data.voiceChannelId = null;
+}
+
+/* =========================
+   API
+========================= */
+
+app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
-    name: "NovaChat",
-    version: "1.0.0"
+    service: "NovaChat",
+    time: Date.now()
   });
 });
 
-/*
-==================================================
-AUTHENTIFICATION
-==================================================
-*/
+/* INSCRIPTION */
 
 app.post("/api/register", (req, res) => {
   try {
-    const email = cleanText(req.body.email, 150).toLowerCase();
-    const username = cleanText(req.body.username, 32);
-    const displayName =
-      cleanText(req.body.displayName, 50) || username;
-    const password = String(req.body.password || "");
+    const email = String(
+      req.body.email || ""
+    ).trim();
+
+    const username = String(
+      req.body.username || ""
+    ).trim();
+
+    const displayName = String(
+      req.body.displayName ||
+      username
+    ).trim();
+
+    const password = String(
+      req.body.password || ""
+    );
 
     if (!email || !username || !password) {
       return res.status(400).json({
         ok: false,
-        error: "Tous les champs sont obligatoires."
+        error:
+          "L'email, le nom d'utilisateur et le mot de passe sont obligatoires."
       });
     }
 
     if (password.length < 6) {
       return res.status(400).json({
         ok: false,
-        error: "Le mot de passe doit contenir au moins 6 caractères."
+        error:
+          "Le mot de passe doit contenir au moins 6 caractères."
       });
     }
 
-    if (!/^[a-zA-Z0-9_.-]+$/.test(username)) {
+    if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(username)) {
       return res.status(400).json({
         ok: false,
         error:
-          "Le nom d'utilisateur peut seulement contenir des lettres, chiffres, _, . et -."
+          "Nom d'utilisateur invalide. Utilise 3 à 32 caractères."
       });
     }
 
-    const emailExists = db.users.some(
-      (user) => user.email.toLowerCase() === email
-    );
-
-    if (emailExists) {
-      return res.status(409).json({
+    if (
+      db.users.some(
+        user =>
+          user.email.toLowerCase() ===
+          email.toLowerCase()
+      )
+    ) {
+      return res.status(400).json({
         ok: false,
-        error: "Cette adresse email est déjà utilisée."
+        error: "Cet email est déjà utilisé."
       });
     }
 
     if (findUserByUsername(username)) {
-      return res.status(409).json({
+      return res.status(400).json({
         ok: false,
-        error: "Ce nom d'utilisateur est déjà utilisé."
+        error:
+          "Ce nom d'utilisateur est déjà utilisé."
       });
     }
 
@@ -300,11 +400,13 @@ app.post("/api/register", (req, res) => {
       id: id(),
       email,
       username,
-      displayName,
-      password: hashPassword(password),
+      displayName:
+        displayName || username,
+      passwordHash:
+        hashPassword(password),
       avatar: "",
-      createdAt: Date.now(),
-      lastUsernameChange: Date.now()
+      lastUsernameChange: Date.now(),
+      createdAt: Date.now()
     };
 
     db.users.push(user);
@@ -312,214 +414,71 @@ app.post("/api/register", (req, res) => {
 
     res.json({
       ok: true,
-      user: publicUser(user)
+      user: cleanUser(user)
     });
   } catch (error) {
-    console.error("REGISTER ERROR:", error);
+    console.error(error);
 
     res.status(500).json({
       ok: false,
-      error: "Une erreur est survenue lors de la création du compte."
+      error: "Erreur serveur."
     });
   }
 });
+
+/* CONNEXION */
 
 app.post("/api/login", (req, res) => {
   try {
-    const login = cleanText(req.body.login, 150);
-    const password = String(req.body.password || "");
+    const login = String(
+      req.body.login || ""
+    ).trim();
 
-    const user = db.users.find(
-      (item) =>
-        item.email.toLowerCase() === login.toLowerCase() ||
-        normalizeUsername(item.username) === normalizeUsername(login)
+    const password = String(
+      req.body.password || ""
     );
 
-    if (!user || !verifyPassword(password, user.password)) {
-      return res.status(401).json({
-        ok: false,
-        error: "Identifiants incorrects."
-      });
-    }
-
-    res.json({
-      ok: true,
-      user: publicUser(user)
-    });
-  } catch (error) {
-    console.error("LOGIN ERROR:", error);
-
-    res.status(500).json({
-      ok: false,
-      error: "Impossible de se connecter."
-    });
-  }
-});
-
-/*
-==================================================
-PROFIL
-==================================================
-*/
-
-app.post("/api/profile", (req, res) => {
-  try {
-    const userId = cleanText(req.body.userId, 100);
-    const user = findUserById(userId);
-
-    if (!user) {
-      return res.status(404).json({
-        ok: false,
-        error: "Utilisateur introuvable."
-      });
-    }
-
-    if (typeof req.body.displayName === "string") {
-      const displayName = cleanText(req.body.displayName, 50);
-
-      if (displayName) {
-        user.displayName = displayName;
-      }
-    }
-
-    if (typeof req.body.avatar === "string") {
-      if (req.body.avatar.length > 2_000_000) {
-        return res.status(400).json({
-          ok: false,
-          error: "Image trop volumineuse."
-        });
-      }
-
-      user.avatar = req.body.avatar;
-    }
-
-    saveDatabase();
-
-    io.emit("user_updated", publicUser(user));
-
-    res.json({
-      ok: true,
-      user: publicUser(user)
-    });
-  } catch (error) {
-    console.error("PROFILE ERROR:", error);
-
-    res.status(500).json({
-      ok: false,
-      error: "Impossible de modifier le profil."
-    });
-  }
-});
-
-app.post("/api/username", (req, res) => {
-  try {
-    const userId = cleanText(req.body.userId, 100);
-    const newUsername = cleanText(req.body.username, 32);
-
-    const user = findUserById(userId);
-
-    if (!user) {
-      return res.status(404).json({
-        ok: false,
-        error: "Utilisateur introuvable."
-      });
-    }
-
-    if (!/^[a-zA-Z0-9_.-]+$/.test(newUsername)) {
+    if (!login || !password) {
       return res.status(400).json({
         ok: false,
-        error: "Nom d'utilisateur invalide."
+        error:
+          "Remplis tous les champs."
       });
     }
 
-    const existing = findUserByUsername(newUsername);
-
-    if (existing && existing.id !== user.id) {
-      return res.status(409).json({
-        ok: false,
-        error: "Ce nom d'utilisateur est déjà utilisé."
-      });
-    }
-
-    const TWO_WEEKS = 14 * 24 * 60 * 60 * 1000;
-    const now = Date.now();
+    const user =
+      findUserByLogin(login);
 
     if (
-      user.lastUsernameChange &&
-      now - user.lastUsernameChange < TWO_WEEKS
+      !user ||
+      user.passwordHash !==
+        hashPassword(password)
     ) {
-      const remaining =
-        TWO_WEEKS - (now - user.lastUsernameChange);
-
-      const days = Math.ceil(
-        remaining / (24 * 60 * 60 * 1000)
-      );
-
-      return res.status(429).json({
+      return res.status(401).json({
         ok: false,
         error:
-          "Tu dois attendre encore environ " +
-          days +
-          " jour(s) avant de changer ton nom d'utilisateur."
+          "Identifiants incorrects."
       });
     }
-
-    user.username = newUsername;
-    user.lastUsernameChange = now;
-
-    saveDatabase();
-
-    io.emit("user_updated", publicUser(user));
 
     res.json({
       ok: true,
-      user: publicUser(user)
+      user: cleanUser(user)
     });
   } catch (error) {
-    console.error("USERNAME ERROR:", error);
+    console.error(error);
 
     res.status(500).json({
       ok: false,
-      error: "Impossible de modifier le nom d'utilisateur."
+      error: "Erreur serveur."
     });
   }
 });
 
-/*
-==================================================
-UTILISATEURS / AMIS
-==================================================
-*/
-
-app.get("/api/users/search", (req, res) => {
-  const query = cleanText(req.query.q, 50);
-
-  if (!query) {
-    return res.json({
-      ok: true,
-      users: []
-    });
-  }
-
-  const normalized = query.toLowerCase();
-
-  const users = db.users
-    .filter(
-      (user) =>
-        user.username.toLowerCase().includes(normalized) ||
-        user.displayName.toLowerCase().includes(normalized)
-    )
-    .slice(0, 20)
-    .map(publicUser);
-
-  res.json({
-    ok: true,
-    users
-  });
-});
+/* AMIS */
 
 app.get("/api/friends/:userId", (req, res) => {
-  const user = findUserById(req.params.userId);
+  const user = getUser(req.params.userId);
 
   if (!user) {
     return res.status(404).json({
@@ -535,725 +494,821 @@ app.get("/api/friends/:userId", (req, res) => {
 });
 
 app.post("/api/friends/add", (req, res) => {
-  try {
-    const userId = cleanText(req.body.userId, 100);
-    const username = cleanText(req.body.username, 32);
+  const userId = String(
+    req.body.userId || ""
+  );
 
-    const user = findUserById(userId);
-    const target = findUserByUsername(username);
+  const username = String(
+    req.body.username || ""
+  ).trim();
 
-    if (!user || !target) {
+  const user = getUser(userId);
+  const friend =
+    findUserByUsername(username);
+
+  if (!user || !friend) {
+    return res.status(404).json({
+      ok: false,
+      error:
+        "Utilisateur introuvable."
+    });
+  }
+
+  if (user.id === friend.id) {
+    return res.status(400).json({
+      ok: false,
+      error:
+        "Tu ne peux pas t'ajouter toi-même."
+    });
+  }
+
+  const exists =
+    db.friendships.some(
+      relation =>
+        (
+          relation.userId === user.id &&
+          relation.friendId === friend.id
+        ) ||
+        (
+          relation.userId === friend.id &&
+          relation.friendId === user.id
+        )
+    );
+
+  if (exists) {
+    return res.status(400).json({
+      ok: false,
+      error:
+        "Cette personne est déjà dans tes amis."
+    });
+  }
+
+  db.friendships.push({
+    id: id(),
+    userId: user.id,
+    friendId: friend.id,
+    createdAt: Date.now()
+  });
+
+  saveDatabase();
+
+  for (const [
+    socketId,
+    info
+  ] of onlineUsers.entries()) {
+    if (
+      info.userId === user.id ||
+      info.userId === friend.id
+    ) {
+      io.to(socketId).emit(
+        "friend_added",
+        {
+          userId: user.id,
+          friendId: friend.id
+        }
+      );
+    }
+  }
+
+  res.json({
+    ok: true,
+    friend: cleanUser(friend)
+  });
+});
+
+/* MP */
+
+app.get(
+  "/api/dm/:userId/:friendId",
+  (req, res) => {
+    const userId =
+      req.params.userId;
+
+    const friendId =
+      req.params.friendId;
+
+    if (
+      !getUser(userId) ||
+      !getUser(friendId)
+    ) {
+      return res.status(404).json({
+        ok: false,
+        error:
+          "Utilisateur introuvable."
+      });
+    }
+
+    res.json({
+      ok: true,
+      messages:
+        getDmMessages(
+          userId,
+          friendId
+        ).map(messageForClient)
+    });
+  }
+);
+
+/* SERVEURS */
+
+app.get(
+  "/api/servers/:userId",
+  (req, res) => {
+    const user = getUser(
+      req.params.userId
+    );
+
+    if (!user) {
       return res.status(404).json({
         ok: false,
         error: "Utilisateur introuvable."
       });
     }
 
-    if (user.id === target.id) {
-      return res.status(400).json({
-        ok: false,
-        error: "Tu ne peux pas t'ajouter toi-même."
-      });
-    }
-
-    if (friendshipExists(user.id, target.id)) {
-      return res.status(409).json({
-        ok: false,
-        error: "Vous êtes déjà amis ou une demande existe déjà."
-      });
-    }
-
-    const friendship = {
-      id: id(),
-      user1: user.id,
-      user2: target.id,
-      status: "accepted",
-      createdAt: Date.now()
-    };
-
-    db.friendships.push(friendship);
-    saveDatabase();
-
-    io.emit("friend_added", {
-      userId: user.id,
-      friendId: target.id
-    });
-
     res.json({
       ok: true,
-      friend: publicUser(target)
-    });
-  } catch (error) {
-    console.error("FRIEND ERROR:", error);
-
-    res.status(500).json({
-      ok: false,
-      error: "Impossible d'ajouter cet ami."
+      servers:
+        getServersForUser(user.id)
     });
   }
-});
-
-/*
-==================================================
-MESSAGERIE PRIVÉE
-==================================================
-*/
-
-app.get("/api/dm/:userId/:friendId", (req, res) => {
-  const userId = req.params.userId;
-  const friendId = req.params.friendId;
-
-  const messages = db.messages
-    .filter(
-      (message) =>
-        message.type === "dm" &&
-        (
-          (message.from === userId && message.to === friendId) ||
-          (message.from === friendId && message.to === userId)
-        )
-    )
-    .sort((a, b) => a.createdAt - b.createdAt)
-    .slice(-200);
-
-  res.json({
-    ok: true,
-    messages
-  });
-});
-
-/*
-==================================================
-SERVEURS
-==================================================
-*/
-
-app.get("/api/servers/:userId", (req, res) => {
-  const userId = req.params.userId;
-
-  const servers = db.servers
-    .filter(
-      (serverData) =>
-        Array.isArray(serverData.members) &&
-        serverData.members.includes(userId)
-    )
-    .map(serverPublic);
-
-  res.json({
-    ok: true,
-    servers
-  });
-});
+);
 
 app.post("/api/servers", (req, res) => {
-  try {
-    const ownerId = cleanText(req.body.ownerId, 100);
-    const name = cleanText(req.body.name, 80);
+  const ownerId = String(
+    req.body.ownerId || ""
+  );
 
-    const owner = findUserById(ownerId);
+  const name = String(
+    req.body.name || ""
+  ).trim();
 
-    if (!owner) {
-      return res.status(404).json({
-        ok: false,
-        error: "Utilisateur introuvable."
-      });
-    }
+  const icon = String(
+    req.body.icon || ""
+  );
 
-    if (!name) {
-      return res.status(400).json({
-        ok: false,
-        error: "Le nom du serveur est obligatoire."
-      });
-    }
+  const owner = getUser(ownerId);
 
-    const serverData = {
-      id: id(),
-      name,
-      icon: typeof req.body.icon === "string"
-        ? req.body.icon.slice(0, 500000)
-        : "",
-      ownerId: owner.id,
-      members: [owner.id],
-      channels: makeDefaultChannels(),
-      createdAt: Date.now()
-    };
-
-    db.servers.push(serverData);
-    saveDatabase();
-
-    io.emit("server_created", serverPublic(serverData));
-
-    res.json({
-      ok: true,
-      server: serverPublic(serverData)
-    });
-  } catch (error) {
-    console.error("SERVER CREATE ERROR:", error);
-
-    res.status(500).json({
+  if (!owner) {
+    return res.status(401).json({
       ok: false,
-      error: "Impossible de créer le serveur."
+      error:
+        "Utilisateur invalide."
     });
   }
+
+  if (!name) {
+    return res.status(400).json({
+      ok: false,
+      error:
+        "Le serveur doit avoir un nom."
+    });
+  }
+
+  const serverData =
+    makeServer(
+      name,
+      icon,
+      owner.id
+    );
+
+  db.servers.push(serverData);
+  saveDatabase();
+
+  res.json({
+    ok: true,
+    server:
+      publicServer(serverData)
+  });
 });
 
-app.post("/api/servers/join", (req, res) => {
-  try {
-    const userId = cleanText(req.body.userId, 100);
-    const serverId = cleanText(req.body.serverId, 100);
-
-    const user = findUserById(userId);
-    const serverData = db.servers.find(
-      (item) => item.id === serverId
+app.post(
+  "/api/servers/join",
+  (req, res) => {
+    const userId = String(
+      req.body.userId || ""
     );
+
+    const serverId = String(
+      req.body.serverId || ""
+    );
+
+    const user = getUser(userId);
+    const serverData =
+      db.servers.find(
+        item => item.id === serverId
+      );
 
     if (!user || !serverData) {
       return res.status(404).json({
         ok: false,
-        error: "Serveur ou utilisateur introuvable."
+        error:
+          "Serveur ou utilisateur introuvable."
       });
     }
 
-    if (!serverData.members.includes(user.id)) {
-      serverData.members.push(user.id);
+    if (
+      !serverData.members.includes(
+        user.id
+      )
+    ) {
+      serverData.members.push(
+        user.id
+      );
+
       saveDatabase();
     }
 
-    io.to("server:" + serverData.id).emit(
-      "server_member_joined",
-      {
-        serverId: serverData.id,
-        user: publicUser(user)
+    res.json({
+      ok: true,
+      server:
+        publicServer(serverData)
+    });
+  }
+);
+
+/* MESSAGES SALON */
+
+app.get(
+  "/api/channels/:channelId/messages",
+  (req, res) => {
+    const channelId =
+      req.params.channelId;
+
+    res.json({
+      ok: true,
+      messages:
+        getMessagesForChannel(
+          channelId
+        ).map(messageForClient)
+    });
+  }
+);
+
+/* PROFIL */
+
+app.post(
+  "/api/profile",
+  (req, res) => {
+    const userId = String(
+      req.body.userId || ""
+    );
+
+    const user = getUser(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        ok: false,
+        error:
+          "Utilisateur introuvable."
+      });
+    }
+
+    if (
+      req.body.displayName !==
+      undefined
+    ) {
+      const displayName = String(
+        req.body.displayName
+      ).trim();
+
+      if (displayName) {
+        user.displayName =
+          displayName;
       }
+    }
+
+    if (
+      req.body.avatar !==
+      undefined
+    ) {
+      user.avatar =
+        String(req.body.avatar || "");
+    }
+
+    saveDatabase();
+
+    io.emit(
+      "user_updated",
+      cleanUser(user)
     );
 
     res.json({
       ok: true,
-      server: serverPublic(serverData)
-    });
-  } catch (error) {
-    console.error("SERVER JOIN ERROR:", error);
-
-    res.status(500).json({
-      ok: false,
-      error: "Impossible de rejoindre le serveur."
+      user: cleanUser(user)
     });
   }
-});
+);
 
-app.get("/api/servers/:serverId/details", (req, res) => {
-  const serverData = db.servers.find(
-    (item) => item.id === req.params.serverId
-  );
+/* NOM UTILISATEUR */
 
-  if (!serverData) {
-    return res.status(404).json({
-      ok: false,
-      error: "Serveur introuvable."
-    });
-  }
+app.post(
+  "/api/username",
+  (req, res) => {
+    const userId = String(
+      req.body.userId || ""
+    );
 
-  res.json({
-    ok: true,
-    server: serverPublic(serverData)
-  });
-});
+    const username = String(
+      req.body.username || ""
+    ).trim();
 
-/*
-==================================================
-MESSAGES DANS LES SALONS
-==================================================
-*/
-
-app.get("/api/channels/:channelId/messages", (req, res) => {
-  const channelId = req.params.channelId;
-
-  const messages = db.messages
-    .filter(
-      (message) =>
-        message.type === "channel" &&
-        message.channelId === channelId
-    )
-    .sort((a, b) => a.createdAt - b.createdAt)
-    .slice(-200);
-
-  res.json({
-    ok: true,
-    messages
-  });
-});
-
-/*
-==================================================
-SOCKET.IO
-==================================================
-*/
-
-const connectedUsers = new Map();
-
-function getSocketUser(socket) {
-  const userId = connectedUsers.get(socket.id);
-
-  if (!userId) {
-    return null;
-  }
-
-  return findUserById(userId);
-}
-
-io.on("connection", (socket) => {
-  console.log("Connexion Socket.IO:", socket.id);
-
-  socket.on("identify", (userId) => {
-    const user = findUserById(userId);
+    const user = getUser(userId);
 
     if (!user) {
-      return;
-    }
-
-    connectedUsers.set(socket.id, user.id);
-
-    socket.data.userId = user.id;
-
-    socket.emit("identified", {
-      user: publicUser(user)
-    });
-
-    io.emit("presence", {
-      userId: user.id,
-      online: true
-    });
-  });
-
-  /*
-  -------------------------
-  DM
-  -------------------------
-  */
-
-  socket.on("dm_send", (data) => {
-    const user = getSocketUser(socket);
-
-    if (!user) {
-      return;
-    }
-
-    const to = cleanText(data && data.to, 100);
-    const content = cleanText(data && data.content, 4000);
-
-    if (!to || !content) {
-      return;
-    }
-
-    const target = findUserById(to);
-
-    if (!target) {
-      return;
-    }
-
-    const message = {
-      id: id(),
-      type: "dm",
-      from: user.id,
-      to: target.id,
-      content,
-      createdAt: Date.now()
-    };
-
-    db.messages.push(message);
-    saveDatabase();
-
-    io.emit("dm_message", message);
-  });
-
-  /*
-  -------------------------
-  Salons texte
-  -------------------------
-  */
-
-  socket.on("channel_send", (data) => {
-    const user = getSocketUser(socket);
-
-    if (!user) {
-      return;
-    }
-
-    const serverId = cleanText(data && data.serverId, 100);
-    const channelId = cleanText(data && data.channelId, 100);
-    const content = cleanText(data && data.content, 4000);
-
-    if (!serverId || !channelId || !content) {
-      return;
-    }
-
-    const serverData = getServerForUser(serverId, user.id);
-
-    if (!serverData) {
-      return;
-    }
-
-    const channel = serverData.channels.find(
-      (item) => item.id === channelId && item.type === "text"
-    );
-
-    if (!channel) {
-      return;
-    }
-
-    const message = {
-      id: id(),
-      type: "channel",
-      serverId,
-      channelId,
-      from: user.id,
-      username: user.username,
-      displayName: user.displayName,
-      avatar: user.avatar || "",
-      content,
-      createdAt: Date.now()
-    };
-
-    db.messages.push(message);
-    saveDatabase();
-
-    io.to("server:" + serverId).emit(
-      "channel_message",
-      message
-    );
-  });
-
-  /*
-  -------------------------
-  Rejoindre un serveur
-  -------------------------
-  */
-
-  socket.on("server_join", (serverId) => {
-    const user = getSocketUser(socket);
-
-    if (!user) {
-      return;
-    }
-
-    const serverData = getServerForUser(serverId, user.id);
-
-    if (!serverData) {
-      return;
-    }
-
-    socket.join("server:" + serverId);
-
-    socket.emit("server_joined", {
-      server: serverPublic(serverData)
-    });
-  });
-
-  /*
-  -------------------------
-  Salon vocal
-  -------------------------
-  */
-
-  socket.on("voice_join", (data) => {
-    const user = getSocketUser(socket);
-
-    if (!user) {
-      return;
-    }
-
-    const serverId = cleanText(data && data.serverId, 100);
-    const channelId = cleanText(data && data.channelId, 100);
-
-    const serverData = getServerForUser(serverId, user.id);
-
-    if (!serverData) {
-      return;
-    }
-
-    const channel = serverData.channels.find(
-      (item) =>
-        item.id === channelId &&
-        item.type === "voice"
-    );
-
-    if (!channel) {
-      return;
-    }
-
-    socket.join("voice:" + channelId);
-
-    socket.data.voiceChannelId = channelId;
-    socket.data.voiceServerId = serverId;
-
-    socket.to("voice:" + channelId).emit(
-      "voice_user_joined",
-      {
-        socketId: socket.id,
-        user: publicUser(user)
-      }
-    );
-
-    const room = io.sockets.adapter.rooms.get(
-      "voice:" + channelId
-    );
-
-    const users = [];
-
-    if (room) {
-      for (const socketId of room) {
-        const roomSocket = io.sockets.sockets.get(socketId);
-
-        if (!roomSocket || !roomSocket.data.userId) {
-          continue;
-        }
-
-        const roomUser = findUserById(
-          roomSocket.data.userId
-        );
-
-        if (roomUser) {
-          users.push({
-            socketId,
-            user: publicUser(roomUser)
-          });
-        }
-      }
-    }
-
-    socket.emit("voice_users", {
-      channelId,
-      users
-    });
-
-    io.to("server:" + serverId).emit(
-      "voice_presence",
-      {
-        channelId,
-        user: publicUser(user),
-        joined: true
-      }
-    );
-  });
-
-  socket.on("voice_leave", () => {
-    leaveVoice(socket);
-  });
-
-  /*
-  -------------------------
-  WebRTC SIGNALING
-  -------------------------
-  */
-
-  socket.on("webrtc_offer", (data) => {
-    if (!data || !data.target) {
-      return;
-    }
-
-    io.to(data.target).emit("webrtc_offer", {
-      from: socket.id,
-      offer: data.offer
-    });
-  });
-
-  socket.on("webrtc_answer", (data) => {
-    if (!data || !data.target) {
-      return;
-    }
-
-    io.to(data.target).emit("webrtc_answer", {
-      from: socket.id,
-      answer: data.answer
-    });
-  });
-
-  socket.on("webrtc_ice", (data) => {
-    if (!data || !data.target) {
-      return;
-    }
-
-    io.to(data.target).emit("webrtc_ice", {
-      from: socket.id,
-      candidate: data.candidate
-    });
-  });
-
-  /*
-  -------------------------
-  Appel privé
-  -------------------------
-  */
-
-  socket.on("call_user", (data) => {
-    const user = getSocketUser(socket);
-
-    if (!user || !data || !data.targetUserId) {
-      return;
-    }
-
-    const targetUserId = data.targetUserId;
-
-    for (const [
-      socketId,
-      connectedUserId
-    ] of connectedUsers.entries()) {
-      if (connectedUserId === targetUserId) {
-        io.to(socketId).emit("incoming_call", {
-          fromSocketId: socket.id,
-          fromUser: publicUser(user),
-          callType: data.callType || "audio"
-        });
-      }
-    }
-  });
-
-  socket.on("call_accept", (data) => {
-    if (!data || !data.target) {
-      return;
-    }
-
-    io.to(data.target).emit("call_accepted", {
-      from: socket.id
-    });
-  });
-
-  socket.on("call_reject", (data) => {
-    if (!data || !data.target) {
-      return;
-    }
-
-    io.to(data.target).emit("call_rejected", {
-      from: socket.id
-    });
-  });
-
-  socket.on("call_end", (data) => {
-    if (!data || !data.target) {
-      return;
-    }
-
-    io.to(data.target).emit("call_ended", {
-      from: socket.id
-    });
-  });
-
-  /*
-  -------------------------
-  Déconnexion
-  -------------------------
-  */
-
-  socket.on("disconnect", () => {
-    const userId = connectedUsers.get(socket.id);
-    const user = findUserById(userId);
-
-    leaveVoice(socket);
-
-    connectedUsers.delete(socket.id);
-
-    if (user) {
-      io.emit("presence", {
-        userId: user.id,
-        online: false
+      return res.status(404).json({
+        ok: false,
+        error:
+          "Utilisateur introuvable."
       });
     }
 
-    console.log("Déconnexion Socket.IO:", socket.id);
-  });
+    if (
+      !/^[a-zA-Z0-9_.-]{3,32}$/.test(
+        username
+      )
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Nom d'utilisateur invalide."
+      });
+    }
+
+    if (
+      username.toLowerCase() !==
+      user.username.toLowerCase()
+    ) {
+      const existing =
+        findUserByUsername(username);
+
+      if (
+        existing &&
+        existing.id !== user.id
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Ce nom d'utilisateur est déjà pris."
+        });
+      }
+
+      const twoWeeks =
+        14 * 24 * 60 * 60 * 1000;
+
+      if (
+        user.lastUsernameChange &&
+        Date.now() -
+          user.lastUsernameChange <
+          twoWeeks
+      ) {
+        const remaining =
+          twoWeeks -
+          (
+            Date.now() -
+            user.lastUsernameChange
+          );
+
+        const days = Math.ceil(
+          remaining /
+            (24 * 60 * 60 * 1000)
+        );
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            `Tu dois attendre encore ${days} jour(s) avant de changer ton nom d'utilisateur.`
+        });
+      }
+
+      user.username =
+        username;
+
+      user.lastUsernameChange =
+        Date.now();
+
+      saveDatabase();
+
+      io.emit(
+        "user_updated",
+        cleanUser(user)
+      );
+    }
+
+    res.json({
+      ok: true,
+      user: cleanUser(user)
+    });
+  }
+);
+
+/* PAGE */
+
+app.get("*", (req, res) => {
+  res.sendFile(
+    path.join(
+      PUBLIC_DIR,
+      "index.html"
+    )
+  );
 });
 
-function leaveVoice(socket) {
-  const channelId = socket.data.voiceChannelId;
-  const serverId = socket.data.voiceServerId;
+/* =========================
+   SOCKET.IO
+========================= */
 
-  if (!channelId) {
-    return;
-  }
+io.on("connection", socket => {
+  console.log(
+    "Connexion:",
+    socket.id
+  );
 
-  const user = getSocketUser(socket);
+  socket.on(
+    "identify",
+    userId => {
+      const user =
+        getUser(userId);
 
-  socket.to("voice:" + channelId).emit(
-    "voice_user_left",
-    {
-      socketId: socket.id,
-      user: publicUser(user)
+      if (!user) return;
+
+      onlineUsers.set(
+        socket.id,
+        {
+          userId
+        }
+      );
+
+      socket.data.userId =
+        userId;
+
+      socket.broadcast.emit(
+        "presence",
+        {
+          userId,
+          online: true
+        }
+      );
     }
   );
 
-  socket.leave("voice:" + channelId);
+  /* MP */
 
-  if (serverId) {
-    io.to("server:" + serverId).emit(
-      "voice_presence",
-      {
-        channelId,
-        user: publicUser(user),
-        joined: false
+  socket.on(
+    "dm_send",
+    data => {
+      const sender =
+        getUser(
+          socket.data.userId
+        );
+
+      const recipient =
+        getUser(
+          data.to
+        );
+
+      if (
+        !sender ||
+        !recipient
+      ) {
+        return;
       }
-    );
-  }
 
-  socket.data.voiceChannelId = null;
-  socket.data.voiceServerId = null;
-}
+      const content =
+        String(
+          data.content || ""
+        ).trim();
 
-/*
-==================================================
-PAGE PRINCIPALE
-==================================================
-*/
+      if (!content) return;
 
-app.get("/", (req, res) => {
-  res.sendFile(
-    path.join(__dirname, "public", "index.html")
+      const message = {
+        id: id(),
+        type: "dm",
+        from: sender.id,
+        to: recipient.id,
+        content,
+        createdAt: Date.now()
+      };
+
+      db.messages.push(message);
+      saveDatabase();
+
+      const output =
+        messageForClient(
+          message
+        );
+
+      socket.emit(
+        "dm_message",
+        output
+      );
+
+      for (const [
+        socketId,
+        info
+      ] of onlineUsers.entries()) {
+        if (
+          info.userId ===
+          recipient.id
+        ) {
+          io.to(socketId).emit(
+            "dm_message",
+            output
+          );
+        }
+      }
+    }
+  );
+
+  /* SERVEUR */
+
+  socket.on(
+    "server_join",
+    serverId => {
+      const userId =
+        socket.data.userId;
+
+      if (!userId) return;
+
+      const serverData =
+        getServerForUser(
+          serverId,
+          userId
+        );
+
+      if (!serverData) return;
+
+      socket.join(
+        "server:" + serverId
+      );
+    }
+  );
+
+  /* MESSAGE SALON */
+
+  socket.on(
+    "channel_send",
+    data => {
+      const userId =
+        socket.data.userId;
+
+      const serverData =
+        getServerForUser(
+          data.serverId,
+          userId
+        );
+
+      if (!serverData) return;
+
+      const channel =
+        serverData.channels.find(
+          item =>
+            item.id ===
+            data.channelId
+        );
+
+      if (
+        !channel ||
+        channel.type !==
+          "text"
+      ) {
+        return;
+      }
+
+      const content =
+        String(
+          data.content || ""
+        ).trim();
+
+      if (!content) return;
+
+      const message = {
+        id: id(),
+        type: "channel",
+        from: userId,
+        serverId:
+          data.serverId,
+        channelId:
+          data.channelId,
+        content,
+        createdAt: Date.now()
+      };
+
+      db.messages.push(message);
+      saveDatabase();
+
+      io.to(
+        "server:" +
+          data.serverId
+      ).emit(
+        "channel_message",
+        messageForClient(
+          message
+        )
+      );
+    }
+  );
+
+  /* =====================
+     VOCAL SERVEUR
+  ===================== */
+
+  socket.on(
+    "voice_join",
+    data => {
+      const userId =
+        socket.data.userId;
+
+      const serverData =
+        getServerForUser(
+          data.serverId,
+          userId
+        );
+
+      if (!serverData) return;
+
+      const channel =
+        serverData.channels.find(
+          item =>
+            item.id ===
+            data.channelId
+        );
+
+      if (
+        !channel ||
+        channel.type !==
+          "voice"
+      ) {
+        return;
+      }
+
+      if (
+        socket.data.voiceChannelId
+      ) {
+        leaveVoice(socket);
+      }
+
+      const channelId =
+        data.channelId;
+
+      if (
+        !voiceRooms.has(
+          channelId
+        )
+      ) {
+        voiceRooms.set(
+          channelId,
+          new Set()
+        );
+      }
+
+      const room =
+        voiceRooms.get(
+          channelId
+        );
+
+      const previousUsers =
+        Array.from(room);
+
+      room.add(socket.id);
+
+      socket.join(
+        "voice:" + channelId
+      );
+
+      socket.data.voiceChannelId =
+        channelId;
+
+      socket.data.voiceServerId =
+        data.serverId;
+
+      socket.to(
+        "voice:" + channelId
+      ).emit(
+        "voice_user_joined",
+        {
+          socketId: socket.id
+        }
+      );
+
+      socket.emit(
+        "voice_existing_users",
+        {
+          users: previousUsers
+        }
+      );
+
+      sendVoiceUsers(
+        channelId
+      );
+    }
+  );
+
+  socket.on(
+    "voice_leave",
+    () => {
+      leaveVoice(socket);
+    }
+  );
+
+  /* =====================
+     WEBRTC MP + SERVEUR
+  ===================== */
+
+  socket.on(
+    "webrtc_offer",
+    data => {
+      if (!data.target) return;
+
+      io.to(
+        data.target
+      ).emit(
+        "webrtc_offer",
+        {
+          from: socket.id,
+          offer: data.offer
+        }
+      );
+    }
+  );
+
+  socket.on(
+    "webrtc_answer",
+    data => {
+      if (!data.target) return;
+
+      io.to(
+        data.target
+      ).emit(
+        "webrtc_answer",
+        {
+          from: socket.id,
+          answer:
+            data.answer
+        }
+      );
+    }
+  );
+
+  socket.on(
+    "webrtc_ice",
+    data => {
+      if (!data.target) return;
+
+      io.to(
+        data.target
+      ).emit(
+        "webrtc_ice",
+        {
+          from: socket.id,
+          candidate:
+            data.candidate
+        }
+      );
+    }
+  );
+
+  socket.on(
+    "disconnect",
+    () => {
+      const info =
+        onlineUsers.get(
+          socket.id
+        );
+
+      if (
+        socket.data.voiceChannelId
+      ) {
+        leaveVoice(socket);
+      }
+
+      if (info) {
+        socket.broadcast.emit(
+          "presence",
+          {
+            userId:
+              info.userId,
+            online: false
+          }
+        );
+      }
+
+      onlineUsers.delete(
+        socket.id
+      );
+
+      console.log(
+        "Déconnexion:",
+        socket.id
+      );
+    }
   );
 });
 
-/*
-==================================================
-404 API
-==================================================
-*/
-
-app.use("/api", (req, res) => {
-  res.status(404).json({
-    ok: false,
-    error: "Route API introuvable."
-  });
-});
-
-/*
-==================================================
-ERREURS
-==================================================
-*/
-
-app.use((error, req, res, next) => {
-  console.error("SERVER ERROR:", error);
-
-  if (res.headersSent) {
-    return next(error);
+server.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+    console.log(
+      `NovaChat lancé sur le port ${PORT}`
+    );
   }
-
-  res.status(500).json({
-    ok: false,
-    error: "Erreur interne du serveur."
-  });
-});
-
-/*
-==================================================
-LANCEMENT
-==================================================
-*/
-
-server.listen(PORT, "0.0.0.0", () => {
-  console.log("");
-  console.log("======================================");
-  console.log("          NOVACHAT SERVEUR");
-  console.log("======================================");
-  console.log("Serveur lancé sur le port :", PORT);
-  console.log("Adresse locale : http://localhost:" + PORT);
-  console.log("======================================");
-  console.log("");
-});
+);
