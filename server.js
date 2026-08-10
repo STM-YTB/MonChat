@@ -5,63 +5,55 @@ const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+
+const io = new Server(server, {
+  cors: {
+    origin: "*"
+  },
+  transports: ["websocket", "polling"]
+});
 
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
-// ===============================
-// DONNÉES EN MÉMOIRE
-// ===============================
+/*
+====================================================
+                    DONNÉES
+====================================================
+*/
 
+// Utilisateurs actuellement connectés
 const users = new Map();
-const servers = new Map();
-const messages = new Map();
 
-// Serveur public de départ
-servers.set("novalounge", {
-  id: "novalounge",
-  name: "Nova Lounge",
-  ownerId: "system",
-  inviteCode: "NOVA-0001",
-  members: new Set(),
-  channels: [
-    { id: "general", name: "général", type: "text" },
-    { id: "gaming", name: "gaming", type: "text" },
-    { id: "entraide", name: "entraide", type: "text" },
-    { id: "voice-general", name: "Salon général", type: "voice" },
-    { id: "voice-gaming", name: "Gaming", type: "voice" },
-    { id: "voice-chill", name: "Chill", type: "voice" }
-  ],
-  roles: [
-    {
-      id: "everyone",
-      name: "@everyone",
-      permissions: ["read", "send", "voice"]
-    }
-  ]
-});
+// Relations d'amitié
+// userId -> Set(userId)
+const friends = new Map();
 
-// ===============================
-// OUTILS
-// ===============================
+// Demandes d'amitié
+// userId -> Set(userId)
+const friendRequests = new Map();
 
-function createId(prefix = "") {
-  return (
-    prefix +
-    Math.random().toString(36).substring(2, 10) +
-    Date.now().toString(36)
-  );
-}
+// Messages privés en mémoire
+// conversationId -> Array(messages)
+const privateMessages = new Map();
 
-function createInviteCode() {
-  return (
-    Math.random().toString(36).substring(2, 6).toUpperCase() +
-    "-" +
-    Math.random().toString(36).substring(2, 6).toUpperCase()
-  );
+// Salons vocaux
+// roomId -> Set(socketId)
+const voiceRooms = new Map();
+
+
+/*
+====================================================
+                  UTILITAIRES
+====================================================
+*/
+
+function cleanName(name) {
+  return String(name || "Utilisateur")
+    .trim()
+    .slice(0, 24) || "Utilisateur";
 }
 
 function publicUser(user) {
@@ -70,555 +62,691 @@ function publicUser(user) {
   return {
     id: user.id,
     username: user.username,
-    avatar: user.avatar || null,
-    status: user.status || "offline",
-    createdAt: user.createdAt
+    avatar: user.username.charAt(0).toUpperCase()
   };
 }
 
-function getServer(serverId) {
-  return servers.get(serverId);
+function getOnlineUsers() {
+  return [...users.values()].map(publicUser);
 }
 
-// ===============================
-// API
-// ===============================
-
-app.get("/api/servers", (req, res) => {
-  const result = [];
-
-  for (const s of servers.values()) {
-    result.push({
-      id: s.id,
-      name: s.name,
-      ownerId: s.ownerId,
-      inviteCode: s.inviteCode,
-      memberCount: s.members.size,
-      channels: s.channels,
-      roles: s.roles
-    });
+function ensureSet(map, key) {
+  if (!map.has(key)) {
+    map.set(key, new Set());
   }
 
-  res.json(result);
-});
+  return map.get(key);
+}
 
-app.post("/api/users", (req, res) => {
-  const username = String(req.body.username || "").trim();
-
-  if (!username) {
-    return res.status(400).json({
-      error: "Nom d'utilisateur obligatoire"
-    });
-  }
-
-  const user = {
-    id: createId("user_"),
-    username: username.substring(0, 24),
-    status: "online",
-    createdAt: Date.now(),
-    friends: new Set(),
-    friendRequests: new Set(),
-    servers: new Set()
-  };
-
-  users.set(user.id, user);
-
-  res.json(publicUser(user));
-});
-
-app.get("/api/users/:id", (req, res) => {
-  const user = users.get(req.params.id);
-
-  if (!user) {
-    return res.status(404).json({
-      error: "Utilisateur introuvable"
-    });
-  }
-
-  res.json(publicUser(user));
-});
-
-// ===============================
-// CRÉER UN SERVEUR
-// ===============================
-
-app.post("/api/servers", (req, res) => {
-  const { name, ownerId } = req.body;
-
-  if (!name || !ownerId) {
-    return res.status(400).json({
-      error: "Nom du serveur et propriétaire requis"
-    });
-  }
-
-  const owner = users.get(ownerId);
-
-  if (!owner) {
-    return res.status(404).json({
-      error: "Propriétaire introuvable"
-    });
-  }
-
-  const serverId = createId("server_");
-
-  const newServer = {
-    id: serverId,
-    name: String(name).substring(0, 50),
-    ownerId,
-    inviteCode: createInviteCode(),
-    members: new Set([ownerId]),
-    channels: [
-      {
-        id: createId("channel_"),
-        name: "général",
-        type: "text"
-      },
-      {
-        id: createId("channel_"),
-        name: "Gaming",
-        type: "text"
-      },
-      {
-        id: createId("voice_"),
-        name: "Salon vocal",
-        type: "voice"
-      }
-    ],
-    roles: [
-      {
-        id: "everyone",
-        name: "@everyone",
-        permissions: ["read", "send", "voice"]
-      },
-      {
-        id: "owner",
-        name: "Propriétaire",
-        permissions: [
-          "read",
-          "send",
-          "voice",
-          "manage_server",
-          "manage_channels",
-          "manage_roles",
-          "kick",
-          "ban"
-        ]
-      }
-    ]
-  };
-
-  servers.set(serverId, newServer);
-  owner.servers.add(serverId);
-
-  res.json({
-    id: newServer.id,
-    name: newServer.name,
-    ownerId: newServer.ownerId,
-    inviteCode: newServer.inviteCode,
-    channels: newServer.channels,
-    roles: newServer.roles
-  });
-});
-
-// ===============================
-// REJOINDRE AVEC UNE INVITATION
-// ===============================
-
-app.post("/api/servers/join", (req, res) => {
-  const { inviteCode, userId } = req.body;
-
-  if (!inviteCode || !userId) {
-    return res.status(400).json({
-      error: "Code d'invitation et utilisateur requis"
-    });
-  }
-
-  const user = users.get(userId);
-
-  if (!user) {
-    return res.status(404).json({
-      error: "Utilisateur introuvable"
-    });
-  }
-
-  let targetServer = null;
-
-  for (const s of servers.values()) {
-    if (s.inviteCode.toUpperCase() === String(inviteCode).toUpperCase()) {
-      targetServer = s;
-      break;
-    }
-  }
-
-  if (!targetServer) {
-    return res.status(404).json({
-      error: "Code d'invitation invalide"
-    });
-  }
-
-  targetServer.members.add(userId);
-  user.servers.add(targetServer.id);
-
-  io.emit("serverMemberJoined", {
-    serverId: targetServer.id,
-    user: publicUser(user)
-  });
-
-  res.json({
-    success: true,
-    server: {
-      id: targetServer.id,
-      name: targetServer.name,
-      ownerId: targetServer.ownerId,
-      inviteCode: targetServer.inviteCode,
-      channels: targetServer.channels,
-      roles: targetServer.roles
-    }
-  });
-});
-
-// ===============================
-// MEMBRES D'UN SERVEUR
-// ===============================
-
-app.get("/api/servers/:serverId/members", (req, res) => {
-  const s = getServer(req.params.serverId);
-
-  if (!s) {
-    return res.status(404).json({
-      error: "Serveur introuvable"
-    });
-  }
-
-  const members = [];
-
-  for (const id of s.members) {
-    const user = users.get(id);
-
-    if (user) {
-      members.push(publicUser(user));
-    }
-  }
-
-  res.json(members);
-});
-
-// ===============================
-// MESSAGES
-// ===============================
-
-app.get("/api/messages/:channelId", (req, res) => {
-  const list = messages.get(req.params.channelId) || [];
-
-  res.json(list);
-});
-
-app.post("/api/messages", (req, res) => {
-  const {
-    channelId,
-    userId,
-    content
-  } = req.body;
-
-  if (!channelId || !userId || !content) {
-    return res.status(400).json({
-      error: "Message incomplet"
-    });
-  }
-
-  const user = users.get(userId);
-
-  if (!user) {
-    return res.status(404).json({
-      error: "Utilisateur introuvable"
-    });
-  }
-
-  const message = {
-    id: createId("msg_"),
-    channelId,
-    userId,
-    username: user.username,
-    content: String(content).substring(0, 2000),
-    createdAt: Date.now()
-  };
-
-  if (!messages.has(channelId)) {
-    messages.set(channelId, []);
-  }
-
-  messages.get(channelId).push(message);
-
-  io.emit("newMessage", message);
-
-  res.json(message);
-});
-
-// ===============================
-// MESSAGES PRIVÉS
-// ===============================
-
-const privateMessages = new Map();
-
-function dmKey(a, b) {
+function conversationId(a, b) {
   return [a, b].sort().join(":");
 }
 
-app.get("/api/dm/:userA/:userB", (req, res) => {
-  const key = dmKey(req.params.userA, req.params.userB);
+function getFriends(userId) {
+  const list = friends.get(userId);
 
-  res.json(privateMessages.get(key) || []);
-});
-
-app.post("/api/dm", (req, res) => {
-  const {
-    from,
-    to,
-    content
-  } = req.body;
-
-  if (!from || !to || !content) {
-    return res.status(400).json({
-      error: "Message privé incomplet"
-    });
+  if (!list) {
+    return [];
   }
 
-  if (!users.has(from) || !users.has(to)) {
-    return res.status(404).json({
-      error: "Utilisateur introuvable"
+  return [...list]
+    .map(id => users.get(id))
+    .filter(Boolean)
+    .map(publicUser);
+}
+
+function emitFriends(userId) {
+  const user = users.get(userId);
+
+  if (!user) return;
+
+  io.to(user.socketRoom).emit("friends-list", {
+    friends: getFriends(userId)
+  });
+}
+
+function emitOnlineUsers() {
+  io.emit("online-users", getOnlineUsers());
+}
+
+
+/*
+====================================================
+                     CONNEXION
+====================================================
+*/
+
+io.on("connection", socket => {
+
+  console.log("Nouvelle connexion :", socket.id);
+
+
+  /*
+  ==================================================
+                    CONNEXION UTILISATEUR
+  ==================================================
+  */
+
+  socket.on("login", username => {
+
+    const name = cleanName(username);
+
+    const user = {
+      id: socket.id,
+      username: name,
+      socketRoom: socket.id
+    };
+
+    users.set(socket.id, user);
+
+    socket.join(socket.id);
+
+    ensureSet(friends, socket.id);
+    ensureSet(friendRequests, socket.id);
+
+    socket.emit("login-ok", {
+      id: socket.id,
+      username: name,
+      friends: getFriends(socket.id)
     });
-  }
 
-  const message = {
-    id: createId("dm_"),
-    from,
-    to,
-    content: String(content).substring(0, 2000),
-    createdAt: Date.now()
-  };
+    emitOnlineUsers();
 
-  const key = dmKey(from, to);
-
-  if (!privateMessages.has(key)) {
-    privateMessages.set(key, []);
-  }
-
-  privateMessages.get(key).push(message);
-
-  io.to(`user:${to}`).emit("privateMessage", message);
-  io.to(`user:${from}`).emit("privateMessage", message);
-
-  res.json(message);
-});
-
-// ===============================
-// SOCKET.IO
-// ===============================
-
-io.on("connection", (socket) => {
-  console.log("Connexion :", socket.id);
-
-  // -----------------------------
-  // UTILISATEUR
-  // -----------------------------
-
-  socket.on("register", (userId) => {
-    const user = users.get(userId);
-
-    if (!user) return;
-
-    user.status = "online";
-    user.socketId = socket.id;
-
-    socket.userId = userId;
-    socket.join(`user:${userId}`);
-
-    io.emit("userStatus", {
-      userId,
-      status: "online"
-    });
-
-    console.log(`${user.username} est en ligne`);
+    console.log(`${name} est connecté`);
   });
 
-  // -----------------------------
-  // SERVEUR
-  // -----------------------------
 
-  socket.on("joinServer", (serverId) => {
-    const s = servers.get(serverId);
+  /*
+  ==================================================
+                    LISTE DES AMIS
+  ==================================================
+  */
 
-    if (!s || !socket.userId) return;
+  socket.on("get-friends", () => {
 
-    if (!s.members.has(socket.userId)) return;
+    if (!users.has(socket.id)) return;
 
-    socket.join(`server:${serverId}`);
-
-    socket.emit("serverJoined", {
-      serverId
+    socket.emit("friends-list", {
+      friends: getFriends(socket.id)
     });
   });
 
-  // -----------------------------
-  // VOCAL
-  // -----------------------------
 
-  socket.on("joinVoice", ({ serverId, roomId }) => {
-    if (!socket.userId) return;
+  /*
+  ==================================================
+                 AJOUTER UN AMI
+  ==================================================
+  */
 
-    const s = servers.get(serverId);
+  socket.on("send-friend-request", data => {
 
-    if (!s || !s.members.has(socket.userId)) {
+    const targetId = String(data?.userId || "");
+
+    const sender = users.get(socket.id);
+    const target = users.get(targetId);
+
+    if (!sender || !target) {
+      socket.emit("friend-error", {
+        message: "Utilisateur introuvable."
+      });
+
       return;
     }
 
-    const room = `voice:${serverId}:${roomId}`;
-
-    // Quitter un ancien vocal
-    if (socket.voiceRoom) {
-      socket.leave(socket.voiceRoom);
-
-      socket.to(socket.voiceRoom).emit("voiceUserLeft", {
-        userId: socket.userId
+    if (targetId === socket.id) {
+      socket.emit("friend-error", {
+        message: "Tu ne peux pas t'ajouter toi-même."
       });
+
+      return;
     }
 
-    socket.join(room);
-    socket.voiceRoom = room;
-    socket.voiceServerId = serverId;
-    socket.voiceRoomId = roomId;
+    const senderFriends = ensureSet(friends, socket.id);
 
-    const clients = [];
+    if (senderFriends.has(targetId)) {
+      socket.emit("friend-error", {
+        message: "Vous êtes déjà amis."
+      });
 
-    const roomSockets = io.sockets.adapter.rooms.get(room);
+      return;
+    }
 
-    if (roomSockets) {
-      for (const socketId of roomSockets) {
-        if (socketId === socket.id) continue;
+    const requests = ensureSet(friendRequests, targetId);
 
-        const otherSocket = io.sockets.sockets.get(socketId);
+    if (requests.has(socket.id)) {
+      socket.emit("friend-error", {
+        message: "Demande déjà envoyée."
+      });
 
-        if (otherSocket && otherSocket.userId) {
-          clients.push(otherSocket.userId);
+      return;
+    }
+
+    requests.add(socket.id);
+
+    socket.emit("friend-request-sent", {
+      user: publicUser(target)
+    });
+
+    io.to(target.socketRoom).emit("friend-request", {
+      from: publicUser(sender)
+    });
+  });
+
+
+  /*
+  ==================================================
+                ACCEPTER UNE DEMANDE
+  ==================================================
+  */
+
+  socket.on("accept-friend-request", data => {
+
+    const requesterId = String(data?.userId || "");
+
+    const requester = users.get(requesterId);
+    const currentUser = users.get(socket.id);
+
+    if (!currentUser || !requester) {
+      return;
+    }
+
+    const requests = ensureSet(friendRequests, socket.id);
+
+    if (!requests.has(requesterId)) {
+      return;
+    }
+
+    requests.delete(requesterId);
+
+    ensureSet(friends, socket.id).add(requesterId);
+    ensureSet(friends, requesterId).add(socket.id);
+
+    socket.emit("friend-added", {
+      user: publicUser(requester)
+    });
+
+    io.to(requester.socketRoom).emit("friend-added", {
+      user: publicUser(currentUser)
+    });
+
+    emitFriends(socket.id);
+    emitFriends(requesterId);
+  });
+
+
+  /*
+  ==================================================
+                REFUSER UNE DEMANDE
+  ==================================================
+  */
+
+  socket.on("decline-friend-request", data => {
+
+    const requesterId = String(data?.userId || "");
+
+    const requests = ensureSet(friendRequests, socket.id);
+
+    requests.delete(requesterId);
+
+    socket.emit("friend-request-declined", {
+      userId: requesterId
+    });
+  });
+
+
+  /*
+  ==================================================
+                     SUPPRIMER AMI
+  ==================================================
+  */
+
+  socket.on("remove-friend", data => {
+
+    const friendId = String(data?.userId || "");
+
+    const myFriends = ensureSet(friends, socket.id);
+
+    myFriends.delete(friendId);
+
+    const theirFriends = ensureSet(friends, friendId);
+
+    theirFriends.delete(socket.id);
+
+    emitFriends(socket.id);
+
+    if (users.has(friendId)) {
+      emitFriends(friendId);
+
+      io.to(users.get(friendId).socketRoom).emit(
+        "friend-removed",
+        {
+          userId: socket.id
+        }
+      );
+    }
+  });
+
+
+  /*
+  ==================================================
+                    MESSAGES PRIVÉS
+  ==================================================
+  */
+
+  socket.on("get-private-messages", data => {
+
+    const otherUserId = String(data?.userId || "");
+
+    if (!users.has(socket.id)) return;
+
+    const id = conversationId(socket.id, otherUserId);
+
+    socket.emit("private-message-history", {
+      userId: otherUserId,
+      messages: privateMessages.get(id) || []
+    });
+  });
+
+
+  socket.on("send-private-message", data => {
+
+    const targetId = String(data?.to || "");
+    const content = String(data?.content || "")
+      .trim()
+      .slice(0, 4000);
+
+    const sender = users.get(socket.id);
+    const target = users.get(targetId);
+
+    if (!sender || !target || !content) {
+      return;
+    }
+
+    const id = conversationId(socket.id, targetId);
+
+    const message = {
+      id:
+        Date.now() +
+        "-" +
+        Math.random()
+          .toString(16)
+          .slice(2),
+
+      from: socket.id,
+
+      fromUsername: sender.username,
+
+      to: targetId,
+
+      content,
+
+      createdAt: Date.now()
+    };
+
+    if (!privateMessages.has(id)) {
+      privateMessages.set(id, []);
+    }
+
+    privateMessages.get(id).push(message);
+
+    /*
+    Limite l'historique à 500 messages
+    */
+
+    if (privateMessages.get(id).length > 500) {
+      privateMessages.get(id).shift();
+    }
+
+    socket.emit("new-private-message", message);
+
+    io.to(target.socketRoom).emit(
+      "new-private-message",
+      message
+    );
+  });
+
+
+  /*
+  ==================================================
+                       VOCAL
+  ==================================================
+  */
+
+  socket.on("join-voice", roomId => {
+
+    if (!users.has(socket.id)) {
+      return;
+    }
+
+    roomId = String(roomId || "general");
+
+    /*
+    Si déjà dans un vocal,
+    on le retire d'abord.
+    */
+
+    leaveVoice(socket);
+
+    if (!voiceRooms.has(roomId)) {
+      voiceRooms.set(roomId, new Set());
+    }
+
+    const room = voiceRooms.get(roomId);
+
+    /*
+    Liste des utilisateurs déjà présents
+    AVANT d'ajouter le nouvel utilisateur.
+    */
+
+    const existingUsers = [...room]
+      .map(id => users.get(id))
+      .filter(Boolean)
+      .map(publicUser);
+
+    socket.join("voice:" + roomId);
+
+    room.add(socket.id);
+
+    socket.data.voiceRoom = roomId;
+
+    /*
+    On donne au nouvel utilisateur
+    la liste des personnes déjà présentes.
+    */
+
+    socket.emit("voice-existing-users", existingUsers);
+
+    /*
+    Les autres utilisateurs apprennent
+    qu'une nouvelle personne vient d'arriver.
+    */
+
+    socket.to("voice:" + roomId).emit(
+      "user-joined-voice",
+      publicUser(users.get(socket.id))
+    );
+
+    emitVoiceUsers(roomId);
+  });
+
+
+  /*
+  ==================================================
+                    QUITTER VOCAL
+  ==================================================
+  */
+
+  socket.on("leave-voice", () => {
+    leaveVoice(socket);
+  });
+
+
+  /*
+  ==================================================
+                UTILISATEURS DU VOCAL
+  ==================================================
+  */
+
+  function emitVoiceUsers(roomId) {
+
+    const room = voiceRooms.get(roomId);
+
+    if (!room) {
+      return;
+    }
+
+    const members = [...room]
+      .map(id => users.get(id))
+      .filter(Boolean)
+      .map(publicUser);
+
+    io.to("voice:" + roomId).emit(
+      "voice-users",
+      members
+    );
+  }
+
+
+  /*
+  ==================================================
+                    SIGNAL WEBRTC
+  ==================================================
+  */
+
+  socket.on("webrtc-offer", data => {
+
+    const target = String(data?.to || "");
+
+    if (!users.has(target)) {
+      return;
+    }
+
+    io.to(target).emit("webrtc-offer", {
+      from: socket.id,
+      offer: data.offer
+    });
+  });
+
+
+  socket.on("webrtc-answer", data => {
+
+    const target = String(data?.to || "");
+
+    if (!users.has(target)) {
+      return;
+    }
+
+    io.to(target).emit("webrtc-answer", {
+      from: socket.id,
+      answer: data.answer
+    });
+  });
+
+
+  socket.on("webrtc-ice-candidate", data => {
+
+    const target = String(data?.to || "");
+
+    if (!users.has(target)) {
+      return;
+    }
+
+    io.to(target).emit(
+      "webrtc-ice-candidate",
+      {
+        from: socket.id,
+        candidate: data.candidate
+      }
+    );
+  });
+
+
+  /*
+  ==================================================
+                   CHAT SERVEUR
+  ==================================================
+  */
+
+  socket.on("send-message", data => {
+
+    const user = users.get(socket.id);
+
+    if (!user) {
+      return;
+    }
+
+    const channel = String(
+      data?.channel || "general"
+    ).slice(0, 50);
+
+    const content = String(
+      data?.content || ""
+    )
+      .trim()
+      .slice(0, 4000);
+
+    if (!content) {
+      return;
+    }
+
+    const message = {
+      id:
+        Date.now() +
+        "-" +
+        Math.random()
+          .toString(16)
+          .slice(2),
+
+      userId: socket.id,
+
+      username: user.username,
+
+      channel,
+
+      content,
+
+      createdAt: Date.now()
+    };
+
+    /*
+    Pour l'instant le message serveur
+    est diffusé à tous les utilisateurs connectés.
+    */
+
+    io.emit("new-message", message);
+  });
+
+
+  /*
+  ==================================================
+                    DÉCONNEXION
+  ==================================================
+  */
+
+  socket.on("disconnect", () => {
+
+    console.log(
+      "Utilisateur déconnecté :",
+      socket.id
+    );
+
+    leaveVoice(socket);
+
+    /*
+    Supprime l'utilisateur de la mémoire.
+    */
+
+    users.delete(socket.id);
+
+    /*
+    Nettoyage des demandes d'ami
+    */
+
+    friendRequests.delete(socket.id);
+
+    for (const requests of friendRequests.values()) {
+      requests.delete(socket.id);
+    }
+
+    /*
+    Nettoyage des relations d'amitié
+    */
+
+    const myFriends = friends.get(socket.id);
+
+    if (myFriends) {
+
+      for (const friendId of myFriends) {
+
+        const friendSet = friends.get(friendId);
+
+        if (friendSet) {
+          friendSet.delete(socket.id);
+        }
+
+        if (users.has(friendId)) {
+          emitFriends(friendId);
         }
       }
     }
 
-    // On donne au nouveau la liste des personnes déjà présentes
-    socket.emit("voiceUsers", {
-      roomId,
-      users: clients
-    });
+    friends.delete(socket.id);
 
-    // Les autres doivent créer une connexion WebRTC
-    socket.to(room).emit("voiceUserJoined", {
-      userId: socket.userId
-    });
-
-    console.log(
-      `Utilisateur ${socket.userId} rejoint le vocal ${room}`
-    );
-  });
-
-  // -----------------------------
-  // WEBRTC SIGNALING
-  // -----------------------------
-
-  socket.on("webrtcOffer", ({ target, offer }) => {
-    if (!target || !offer) return;
-
-    io.to(`user:${target}`).emit("webrtcOffer", {
-      from: socket.userId,
-      offer
-    });
-  });
-
-  socket.on("webrtcAnswer", ({ target, answer }) => {
-    if (!target || !answer) return;
-
-    io.to(`user:${target}`).emit("webrtcAnswer", {
-      from: socket.userId,
-      answer
-    });
-  });
-
-  socket.on("webrtcIceCandidate", ({ target, candidate }) => {
-    if (!target || !candidate) return;
-
-    io.to(`user:${target}`).emit("webrtcIceCandidate", {
-      from: socket.userId,
-      candidate
-    });
-  });
-
-  // -----------------------------
-  // QUITTER LE VOCAL
-  // -----------------------------
-
-  socket.on("leaveVoice", () => {
-    if (!socket.voiceRoom) return;
-
-    const room = socket.voiceRoom;
-
-    socket.leave(room);
-
-    socket.to(room).emit("voiceUserLeft", {
-      userId: socket.userId
-    });
-
-    socket.voiceRoom = null;
-    socket.voiceServerId = null;
-    socket.voiceRoomId = null;
-  });
-
-  // -----------------------------
-  // DÉCONNEXION
-  // -----------------------------
-
-  socket.on("disconnect", () => {
-    console.log("Déconnexion :", socket.id);
-
-    if (socket.voiceRoom) {
-      socket.to(socket.voiceRoom).emit("voiceUserLeft", {
-        userId: socket.userId
-      });
-    }
-
-    if (socket.userId) {
-      const user = users.get(socket.userId);
-
-      if (user && user.socketId === socket.id) {
-        user.status = "offline";
-        user.socketId = null;
-
-        io.emit("userStatus", {
-          userId: socket.userId,
-          status: "offline"
-        });
-      }
-    }
+    emitOnlineUsers();
   });
 });
 
-// ===============================
-// FALLBACK POUR LE SITE
-// ===============================
 
-app.use((req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+/*
+====================================================
+                 QUITTER UN VOCAL
+====================================================
+*/
+
+function leaveVoice(socket) {
+
+  const roomId = socket.data.voiceRoom;
+
+  if (!roomId) {
+    return;
+  }
+
+  const room = voiceRooms.get(roomId);
+
+  if (room) {
+
+    room.delete(socket.id);
+
+    socket.leave("voice:" + roomId);
+
+    socket
+      .to("voice:" + roomId)
+      .emit(
+        "user-left-voice",
+        socket.id
+      );
+
+    if (room.size === 0) {
+      voiceRooms.delete(roomId);
+    } else {
+      emitVoiceUsers(roomId);
+    }
+  }
+
+  socket.data.voiceRoom = null;
+}
+
+
+/*
+====================================================
+                       API
+====================================================
+*/
+
+app.get("/api/status", (req, res) => {
+
+  res.json({
+    online: users.size,
+    voiceRooms: [...voiceRooms.entries()].map(
+      ([name, members]) => ({
+        name,
+        users: members.size
+      })
+    )
+  });
 });
 
-// ===============================
-// DÉMARRAGE
-// ===============================
 
-server.listen(PORT, () => {
-  console.log("");
-  console.log("================================");
-  console.log("       NOVACHAT SERVEUR");
-  console.log("================================");
-  console.log(`Serveur lancé sur le port ${PORT}`);
-  console.log(`http://localhost:${PORT}`);
-  console.log("================================");
-  console.log("");
+/*
+====================================================
+                    DÉMARRAGE
+====================================================
+*/
+
+server.listen(PORT, "0.0.0.0", () => {
+
+  console.log(
+    `NovaChat lancé sur le port ${PORT}`
+  );
+
 });
