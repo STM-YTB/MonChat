@@ -1,169 +1,62 @@
-```js
+```javascript
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io");
-const crypto = require("crypto");
-const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-
-const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
+const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
 
-// ============================================================
-// DATABASE
-// ============================================================
+/*
+=========================================================
+DONNÉES
+=========================================================
+*/
 
-const DATA_FILE = path.join(__dirname, "data.json");
+const users = new Map();
+const sessions = new Map();
+const friendRequests = new Map();
+const friendships = new Map();
+const conversations = new Map();
+const servers = new Map();
+const serverMembers = new Map();
 
-const defaultDatabase = {
-  users: [],
-  servers: [],
-  messages: []
-};
+const sockets = new Map();
 
-function loadDatabase() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) {
-      fs.writeFileSync(
-        DATA_FILE,
-        JSON.stringify(defaultDatabase, null, 2)
-      );
-
-      return JSON.parse(JSON.stringify(defaultDatabase));
-    }
-
-    const data = JSON.parse(
-      fs.readFileSync(DATA_FILE, "utf8")
-    );
-
-    return {
-      users: Array.isArray(data.users) ? data.users : [],
-      servers: Array.isArray(data.servers) ? data.servers : [],
-      messages: Array.isArray(data.messages) ? data.messages : []
-    };
-  } catch (error) {
-    console.error("Erreur lecture database :", error);
-
-    return JSON.parse(
-      JSON.stringify(defaultDatabase)
-    );
-  }
-}
-
-let db = loadDatabase();
-
-function saveDatabase() {
-  try {
-    const tempFile = DATA_FILE + ".tmp";
-
-    fs.writeFileSync(
-      tempFile,
-      JSON.stringify(db, null, 2)
-    );
-
-    fs.renameSync(tempFile, DATA_FILE);
-  } catch (error) {
-    console.error("Erreur sauvegarde database :", error);
-  }
-}
-
-// ============================================================
-// UTILITAIRES
-// ============================================================
+/*
+=========================================================
+OUTILS
+=========================================================
+*/
 
 function id() {
   return crypto.randomUUID();
 }
 
-function randomCode(length = 8) {
-  const chars =
-    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-
-  let result = "";
-
-  for (let i = 0; i < length; i++) {
-    result += chars[
-      crypto.randomInt(0, chars.length)
-    ];
-  }
-
-  return result;
+function createInviteCode() {
+  return crypto.randomBytes(5).toString("hex").toUpperCase();
 }
 
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString("hex");
-
-  const hash = crypto
-    .pbkdf2Sync(
-      password,
-      salt,
-      120000,
-      64,
-      "sha512"
-    )
-    .toString("hex");
-
-  return `${salt}:${hash}`;
-}
-
-function verifyPassword(password, storedPassword) {
-  try {
-    const parts = storedPassword.split(":");
-
-    if (parts.length !== 2) {
-      return false;
-    }
-
-    const salt = parts[0];
-    const originalHash = parts[1];
-
-    const hash = crypto
-      .pbkdf2Sync(
-        password,
-        salt,
-        120000,
-        64,
-        "sha512"
-      )
-      .toString("hex");
-
-    return crypto.timingSafeEqual(
-      Buffer.from(hash, "hex"),
-      Buffer.from(originalHash, "hex")
-    );
-  } catch {
-    return false;
-  }
-}
-
-function normalizeUsername(username) {
-  return String(username || "")
+function cleanUsername(value) {
+  return String(value || "")
     .trim()
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]/g, "");
 }
 
-function validUsername(username) {
-  return /^[a-zA-Z0-9_.-]{3,24}$/.test(username);
-}
-
-function validDisplayName(name) {
-  return (
-    typeof name === "string" &&
-    name.trim().length >= 1 &&
-    name.trim().length <= 32
-  );
+function cleanDisplayName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 32);
 }
 
 function publicUser(user) {
@@ -173,172 +66,163 @@ function publicUser(user) {
     id: user.id,
     username: user.username,
     displayName: user.displayName,
-    avatar: user.avatar || null,
     createdAt: user.createdAt
   };
 }
 
-function findUserById(userId) {
-  return db.users.find(
-    user => user.id === userId
-  );
+function getUserByUsername(username) {
+  const wanted = cleanUsername(username);
+
+  for (const user of users.values()) {
+    if (user.username === wanted) {
+      return user;
+    }
+  }
+
+  return null;
 }
 
-function findUserByUsername(username) {
-  const normalized = normalizeUsername(username);
+function getAuthUser(req) {
+  const header = req.headers.authorization || "";
 
-  return db.users.find(
-    user => user.username === normalized
-  );
-}
-
-// ============================================================
-// SESSIONS
-// ============================================================
-
-const sessions = new Map();
-
-function createSession(userId) {
-  const token = crypto
-    .randomBytes(48)
-    .toString("hex");
-
-  sessions.set(token, {
-    userId,
-    createdAt: Date.now()
-  });
-
-  return token;
-}
-
-function getUserFromToken(token) {
-  if (!token) return null;
-
-  const session = sessions.get(token);
-
-  if (!session) {
+  if (!header.startsWith("Bearer ")) {
     return null;
   }
 
-  return findUserById(session.userId);
-}
+  const token = header.substring(7);
 
-function auth(req, res, next) {
-  const header = req.headers.authorization || "";
+  const userId = sessions.get(token);
 
-  const token = header.startsWith("Bearer ")
-    ? header.substring(7)
-    : null;
-
-  const user = getUserFromToken(token);
-
-  if (!user) {
-    return res.status(401).json({
-      error: "Non connecté"
-    });
+  if (!userId) {
+    return null;
   }
 
-  req.user = user;
-  req.token = token;
-
-  next();
+  return users.get(userId) || null;
 }
 
-// ============================================================
-// AUTHENTIFICATION
-// ============================================================
+function requireAuth(req, res) {
+  const user = getAuthUser(req);
+
+  if (!user) {
+    res.status(401).json({
+      error: "Non connecté."
+    });
+
+    return null;
+  }
+
+  return user;
+}
+
+function friendshipKey(a, b) {
+  return [a, b].sort().join(":");
+}
+
+function areFriends(a, b) {
+  return friendships.has(
+    friendshipKey(a, b)
+  );
+}
+
+function conversationKey(a, b) {
+  return [a, b].sort().join(":");
+}
+
+function hashPassword(password) {
+  return crypto
+    .createHash("sha256")
+    .update(String(password))
+    .digest("hex");
+}
+
+function sendToUser(userId, event, data) {
+  const socketId = sockets.get(userId);
+
+  if (!socketId) {
+    return;
+  }
+
+  const socket = io.sockets.sockets.get(socketId);
+
+  if (socket) {
+    socket.emit(event, data);
+  }
+}
+
+/*
+=========================================================
+AUTH
+=========================================================
+*/
 
 app.post("/api/auth/register", (req, res) => {
-  const {
-    email,
-    password,
-    username,
-    displayName
-  } = req.body;
+  const email = String(req.body.email || "")
+    .trim()
+    .toLowerCase();
 
-  if (
-    typeof email !== "string" ||
-    !email.includes("@")
-  ) {
+  const username = cleanUsername(
+    req.body.username
+  );
+
+  const displayName =
+    cleanDisplayName(
+      req.body.displayName
+    ) || username;
+
+  const password =
+    String(req.body.password || "");
+
+  if (!email || !email.includes("@")) {
     return res.status(400).json({
       error: "Adresse email invalide."
     });
   }
 
-  if (
-    typeof password !== "string" ||
-    password.length < 6
-  ) {
+  if (username.length < 3) {
+    return res.status(400).json({
+      error:
+        "Le nom d'utilisateur doit contenir au moins 3 caractères."
+    });
+  }
+
+  if (password.length < 6) {
     return res.status(400).json({
       error:
         "Le mot de passe doit contenir au moins 6 caractères."
     });
   }
 
-  const normalizedEmail =
-    email.trim().toLowerCase();
+  for (const user of users.values()) {
+    if (user.email === email) {
+      return res.status(400).json({
+        error: "Cette adresse email est déjà utilisée."
+      });
+    }
 
-  const normalizedUsername =
-    normalizeUsername(username);
-
-  if (!validUsername(normalizedUsername)) {
-    return res.status(400).json({
-      error:
-        "Nom d'utilisateur invalide. Utilise 3 à 24 caractères : lettres, chiffres, _, - ou ."
-    });
-  }
-
-  if (
-    db.users.some(
-      user => user.email === normalizedEmail
-    )
-  ) {
-    return res.status(409).json({
-      error: "Cette adresse email est déjà utilisée."
-    });
-  }
-
-  if (
-    db.users.some(
-      user => user.username === normalizedUsername
-    )
-  ) {
-    return res.status(409).json({
-      error: "Ce nom d'utilisateur est déjà utilisé."
-    });
+    if (user.username === username) {
+      return res.status(400).json({
+        error:
+          "Ce nom d'utilisateur est déjà utilisé."
+      });
+    }
   }
 
   const user = {
     id: id(),
-    email: normalizedEmail,
-    password: hashPassword(password),
-
-    username: normalizedUsername,
-
-    displayName:
-      validDisplayName(displayName)
-        ? displayName.trim()
-        : normalizedUsername,
-
-    avatar: null,
-
-    createdAt: Date.now(),
-
-    lastUsernameChange: Date.now(),
-
-    friends: [],
-
-    incomingFriendRequests: [],
-    outgoingFriendRequests: [],
-
-    servers: []
+    email,
+    username,
+    displayName,
+    passwordHash: hashPassword(password),
+    createdAt: new Date().toISOString(),
+    usernameChangedAt: Date.now()
   };
 
-  db.users.push(user);
+  users.set(user.id, user);
+  friendships.set(user.id, new Set());
 
-  saveDatabase();
+  const token = crypto.randomBytes(32).toString("hex");
 
-  const token = createSession(user.id);
+  sessions.set(token, user.id);
 
   res.json({
     token,
@@ -347,30 +231,41 @@ app.post("/api/auth/register", (req, res) => {
 });
 
 app.post("/api/auth/login", (req, res) => {
-  const {
-    email,
-    password
-  } = req.body;
+  const email = String(req.body.email || "")
+    .trim()
+    .toLowerCase();
 
-  const normalizedEmail =
-    String(email || "")
-      .trim()
-      .toLowerCase();
+  const password =
+    String(req.body.password || "");
 
-  const user = db.users.find(
-    u => u.email === normalizedEmail
-  );
+  let user = null;
+
+  for (const item of users.values()) {
+    if (item.email === email) {
+      user = item;
+      break;
+    }
+  }
+
+  if (!user) {
+    return res.status(401).json({
+      error: "Email ou mot de passe incorrect."
+    });
+  }
 
   if (
-    !user ||
-    !verifyPassword(password || "", user.password)
+    user.passwordHash !==
+    hashPassword(password)
   ) {
     return res.status(401).json({
       error: "Email ou mot de passe incorrect."
     });
   }
 
-  const token = createSession(user.id);
+  const token =
+    crypto.randomBytes(32).toString("hex");
+
+  sessions.set(token, user.id);
 
   res.json({
     token,
@@ -378,191 +273,279 @@ app.post("/api/auth/login", (req, res) => {
   });
 });
 
-app.post(
-  "/api/auth/logout",
-  auth,
-  (req, res) => {
-    sessions.delete(req.token);
+app.post("/api/auth/logout", (req, res) => {
+  const header =
+    req.headers.authorization || "";
 
-    res.json({
-      success: true
-    });
+  if (header.startsWith("Bearer ")) {
+    sessions.delete(
+      header.substring(7)
+    );
   }
-);
 
-app.get(
-  "/api/auth/me",
-  auth,
-  (req, res) => {
-    res.json({
-      user: publicUser(req.user)
-    });
+  res.json({
+    success: true
+  });
+});
+
+app.get("/api/auth/me", (req, res) => {
+  const user = requireAuth(req, res);
+
+  if (!user) return;
+
+  res.json({
+    user: publicUser(user)
+  });
+});
+
+/*
+=========================================================
+UTILISATEURS
+=========================================================
+*/
+
+app.get("/api/users/search", (req, res) => {
+  const user = requireAuth(req, res);
+
+  if (!user) return;
+
+  const username =
+    cleanUsername(
+      req.query.username
+    );
+
+  const result = [];
+
+  for (const item of users.values()) {
+    if (
+      item.id !== user.id &&
+      item.username.includes(username)
+    ) {
+      result.push(
+        publicUser(item)
+      );
+    }
   }
-);
 
-// ============================================================
-// PROFIL
-// ============================================================
+  res.json({
+    users: result.slice(0, 20)
+  });
+});
 
-// Changer le nom d'affichage quand on veut
+/*
+=========================================================
+PROFIL
+=========================================================
+*/
+
 app.patch(
   "/api/profile/display-name",
-  auth,
   (req, res) => {
-    const { displayName } = req.body;
+    const user = requireAuth(req, res);
 
-    if (!validDisplayName(displayName)) {
+    if (!user) return;
+
+    const displayName =
+      cleanDisplayName(
+        req.body.displayName
+      );
+
+    if (!displayName) {
       return res.status(400).json({
         error:
-          "Le nom d'affichage doit contenir entre 1 et 32 caractères."
+          "Le nom d'affichage est vide."
       });
     }
 
-    req.user.displayName =
-      displayName.trim();
+    user.displayName =
+      displayName;
 
-    saveDatabase();
+    const result =
+      publicUser(user);
 
-    io.emit("user:updated", {
-      user: publicUser(req.user)
-    });
+    sendToUser(
+      user.id,
+      "user:updated",
+      {
+        user: result
+      }
+    );
 
     res.json({
-      user: publicUser(req.user)
+      user: result
     });
   }
 );
 
-// Changer le nom d'utilisateur une fois tous les 14 jours
 app.patch(
   "/api/profile/username",
-  auth,
   (req, res) => {
-    const {
-      username
-    } = req.body;
+    const user = requireAuth(req, res);
 
-    const newUsername =
-      normalizeUsername(username);
+    if (!user) return;
 
-    if (!validUsername(newUsername)) {
+    const username =
+      cleanUsername(
+        req.body.username
+      );
+
+    if (username.length < 3) {
       return res.status(400).json({
         error:
-          "Nom d'utilisateur invalide."
+          "Le nom d'utilisateur doit contenir au moins 3 caractères."
       });
     }
 
-    const fourteenDays =
+    const twoWeeks =
       14 * 24 * 60 * 60 * 1000;
 
-    const elapsed =
+    if (
+      user.usernameChangedAt &&
       Date.now() -
-      (req.user.lastUsernameChange || 0);
-
-    if (elapsed < fourteenDays) {
+        user.usernameChangedAt <
+        twoWeeks
+    ) {
       const remaining =
-        fourteenDays - elapsed;
+        twoWeeks -
+        (Date.now() -
+          user.usernameChangedAt);
 
-      const days = Math.ceil(
-        remaining /
+      const days =
+        Math.ceil(
+          remaining /
           (24 * 60 * 60 * 1000)
-      );
+        );
 
-      return res.status(429).json({
+      return res.status(400).json({
         error:
-          `Tu pourras changer ton nom d'utilisateur dans environ ${days} jour(s).`
+          "Tu dois attendre encore " +
+          days +
+          " jour(s) avant de changer ton nom d'utilisateur."
       });
     }
 
     const existing =
-      db.users.find(
-        user =>
-          user.username === newUsername &&
-          user.id !== req.user.id
+      getUserByUsername(
+        username
       );
 
-    if (existing) {
-      return res.status(409).json({
+    if (
+      existing &&
+      existing.id !== user.id
+    ) {
+      return res.status(400).json({
         error:
-          "Ce nom d'utilisateur est déjà pris."
+          "Ce nom d'utilisateur est déjà utilisé."
       });
     }
 
-    req.user.username =
-      newUsername;
+    user.username =
+      username;
 
-    req.user.lastUsernameChange =
+    user.usernameChangedAt =
       Date.now();
 
-    saveDatabase();
+    const result =
+      publicUser(user);
 
-    io.emit("user:updated", {
-      user: publicUser(req.user)
-    });
+    sendToUser(
+      user.id,
+      "user:updated",
+      {
+        user: result
+      }
+    );
 
     res.json({
-      user: publicUser(req.user)
+      user: result
     });
   }
 );
 
-// ============================================================
-// RECHERCHE UTILISATEURS
-// ============================================================
+/*
+=========================================================
+AMIS
+=========================================================
+*/
 
-app.get(
-  "/api/users/search",
-  auth,
-  (req, res) => {
-    const query =
-      normalizeUsername(req.query.username);
+app.get("/api/friends", (req, res) => {
+  const user = requireAuth(req, res);
 
-    if (!query) {
-      return res.json({
-        users: []
-      });
+  if (!user) return;
+
+  const list = [];
+
+  for (const key of friendships.keys()) {
+    const parts = key.split(":");
+
+    if (!parts.includes(user.id)) {
+      continue;
     }
 
-    const users = db.users
-      .filter(user =>
-        user.username.includes(query)
-      )
-      .filter(user =>
-        user.id !== req.user.id
-      )
-      .slice(0, 20)
-      .map(publicUser);
+    const otherId =
+      parts[0] === user.id
+        ? parts[1]
+        : parts[0];
 
-    res.json({
-      users
-    });
+    const other =
+      users.get(otherId);
+
+    if (other) {
+      list.push(
+        publicUser(other)
+      );
+    }
   }
-);
 
-// ============================================================
-// AMIS
-// ============================================================
+  const incomingRequests = [];
 
-// Envoyer une demande avec le nom d'utilisateur
+  for (const request of friendRequests.values()) {
+    if (
+      request.to === user.id &&
+      request.status === "pending"
+    ) {
+      const from =
+        users.get(request.from);
+
+      if (from) {
+        incomingRequests.push(
+          publicUser(from)
+        );
+      }
+    }
+  }
+
+  res.json({
+    friends: list,
+    incomingRequests
+  });
+});
+
 app.post(
   "/api/friends/request",
-  auth,
   (req, res) => {
-    const {
-      username
-    } = req.body;
+    const user = requireAuth(req, res);
+
+    if (!user) return;
+
+    const username =
+      cleanUsername(
+        req.body.username
+      );
 
     const target =
-      findUserByUsername(username);
+      getUserByUsername(
+        username
+      );
 
     if (!target) {
       return res.status(404).json({
         error:
-          "Aucun utilisateur trouvé avec ce nom."
+          "Utilisateur introuvable."
       });
     }
 
-    if (target.id === req.user.id) {
+    if (target.id === user.id) {
       return res.status(400).json({
         error:
           "Tu ne peux pas t'ajouter toi-même."
@@ -570,7 +553,8 @@ app.post(
     }
 
     if (
-      req.user.friends.includes(
+      areFriends(
+        user.id,
         target.id
       )
     ) {
@@ -580,459 +564,39 @@ app.post(
       });
     }
 
-    if (
-      target.incomingFriendRequests.includes(
-        req.user.id
-      )
-    ) {
-      return res.status(400).json({
-        error:
-          "Une demande est déjà en attente."
-      });
-    }
-
-    target.incomingFriendRequests.push(
-      req.user.id
-    );
-
-    req.user.outgoingFriendRequests.push(
-      target.id
-    );
-
-    saveDatabase();
-
-    io.to(`user:${target.id}`).emit(
-      "friend:request",
-      {
-        from: publicUser(req.user)
+    for (const request of friendRequests.values()) {
+      if (
+        request.from === user.id &&
+        request.to === target.id &&
+        request.status === "pending"
+      ) {
+        return res.status(400).json({
+          error:
+            "Une demande est déjà envoyée."
+        });
       }
-    );
-
-    res.json({
-      success: true,
-      message:
-        "Demande d'ami envoyée."
-    });
-  }
-);
-
-// Accepter une demande
-app.post(
-  "/api/friends/accept",
-  auth,
-  (req, res) => {
-    const {
-      userId
-    } = req.body;
-
-    const requester =
-      findUserById(userId);
-
-    if (!requester) {
-      return res.status(404).json({
-        error:
-          "Utilisateur introuvable."
-      });
     }
 
-    if (
-      !req.user.incomingFriendRequests.includes(
-        userId
-      )
-    ) {
-      return res.status(400).json({
-        error:
-          "Aucune demande en attente."
-      });
-    }
-
-    req.user.incomingFriendRequests =
-      req.user.incomingFriendRequests.filter(
-        id => id !== userId
-      );
-
-    requester.outgoingFriendRequests =
-      requester.outgoingFriendRequests.filter(
-        id => id !== req.user.id
-      );
-
-    if (
-      !req.user.friends.includes(
-        requester.id
-      )
-    ) {
-      req.user.friends.push(
-        requester.id
-      );
-    }
-
-    if (
-      !requester.friends.includes(
-        req.user.id
-      )
-    ) {
-      requester.friends.push(
-        req.user.id
-      );
-    }
-
-    saveDatabase();
-
-    io.to(`user:${requester.id}`).emit(
-      "friend:accepted",
-      {
-        user: publicUser(req.user)
-      }
-    );
-
-    res.json({
-      success: true
-    });
-  }
-);
-
-// Refuser une demande
-app.post(
-  "/api/friends/decline",
-  auth,
-  (req, res) => {
-    const {
-      userId
-    } = req.body;
-
-    req.user.incomingFriendRequests =
-      req.user.incomingFriendRequests.filter(
-        id => id !== userId
-      );
-
-    const requester =
-      findUserById(userId);
-
-    if (requester) {
-      requester.outgoingFriendRequests =
-        requester.outgoingFriendRequests.filter(
-          id => id !== req.user.id
-        );
-    }
-
-    saveDatabase();
-
-    res.json({
-      success: true
-    });
-  }
-);
-
-// Liste d'amis
-app.get(
-  "/api/friends",
-  auth,
-  (req, res) => {
-    const friends =
-      req.user.friends
-        .map(findUserById)
-        .filter(Boolean)
-        .map(publicUser);
-
-    const incoming =
-      req.user.incomingFriendRequests
-        .map(findUserById)
-        .filter(Boolean)
-        .map(publicUser);
-
-    res.json({
-      friends,
-      incomingRequests: incoming
-    });
-  }
-);
-
-// ============================================================
-// SERVEURS
-// ============================================================
-
-// Créer un serveur
-app.post(
-  "/api/servers",
-  auth,
-  (req, res) => {
-    const {
-      name
-    } = req.body;
-
-    if (
-      typeof name !== "string" ||
-      name.trim().length < 1 ||
-      name.trim().length > 50
-    ) {
-      return res.status(400).json({
-        error:
-          "Le nom du serveur doit contenir entre 1 et 50 caractères."
-      });
-    }
-
-    let inviteCode;
-
-    do {
-      inviteCode =
-        randomCode(8);
-    } while (
-      db.servers.some(
-        s => s.inviteCode === inviteCode
-      )
-    );
-
-    const newServer = {
+    const request = {
       id: id(),
-
-      name: name.trim(),
-
-      ownerId: req.user.id,
-
-      inviteCode,
-
-      createdAt: Date.now(),
-
-      members: [
-        {
-          userId: req.user.id,
-          role: "owner"
-        }
-      ],
-
-      roles: [
-        {
-          id: id(),
-          name: "everyone",
-          permissions: [
-            "VIEW_CHANNEL",
-            "SEND_MESSAGES",
-            "CONNECT",
-            "SPEAK"
-          ]
-        }
-      ],
-
-      channels: [
-        {
-          id: id(),
-          name: "général",
-          type: "text"
-        },
-        {
-          id: id(),
-          name: "Vocal général",
-          type: "voice"
-        }
-      ]
+      from: user.id,
+      to: target.id,
+      status: "pending",
+      createdAt:
+        new Date().toISOString()
     };
 
-    db.servers.push(
-      newServer
+    friendRequests.set(
+      request.id,
+      request
     );
 
-    req.user.servers.push(
-      newServer.id
-    );
-
-    saveDatabase();
-
-    res.json({
-      server: newServer
-    });
-  }
-);
-
-// Rejoindre avec le code
-app.post(
-  "/api/servers/join",
-  auth,
-  (req, res) => {
-    const {
-      inviteCode
-    } = req.body;
-
-    const server =
-      db.servers.find(
-        s =>
-          s.inviteCode.toLowerCase() ===
-          String(inviteCode || "")
-            .trim()
-            .toLowerCase()
-      );
-
-    if (!server) {
-      return res.status(404).json({
-        error:
-          "Code d'invitation invalide."
-      });
-    }
-
-    if (
-      server.members.some(
-        member =>
-          member.userId === req.user.id
-      )
-    ) {
-      return res.status(400).json({
-        error:
-          "Tu es déjà membre de ce serveur."
-      });
-    }
-
-    server.members.push({
-      userId: req.user.id,
-      role: "member"
-    });
-
-    req.user.servers.push(
-      server.id
-    );
-
-    saveDatabase();
-
-    io.to(`server:${server.id}`).emit(
-      "server:member-joined",
+    sendToUser(
+      target.id,
+      "friend:request",
       {
-        user: publicUser(req.user)
-      }
-    );
-
-    res.json({
-      server
-    });
-  }
-);
-
-// Liste des serveurs de l'utilisateur
-app.get(
-  "/api/servers",
-  auth,
-  (req, res) => {
-    const servers =
-      req.user.servers
-        .map(serverId =>
-          db.servers.find(
-            server =>
-              server.id === serverId
-          )
-        )
-        .filter(Boolean);
-
-    res.json({
-      servers
-    });
-  }
-);
-
-// Informations serveur
-app.get(
-  "/api/servers/:serverId",
-  auth,
-  (req, res) => {
-    const server =
-      db.servers.find(
-        s =>
-          s.id === req.params.serverId
-      );
-
-    if (!server) {
-      return res.status(404).json({
-        error:
-          "Serveur introuvable."
-      });
-    }
-
-    const isMember =
-      server.members.some(
-        member =>
-          member.userId ===
-          req.user.id
-      );
-
-    if (!isMember) {
-      return res.status(403).json({
-        error:
-          "Tu n'es pas membre de ce serveur."
-      });
-    }
-
-    const members =
-      server.members
-        .map(member => {
-          const user =
-            findUserById(
-              member.userId
-            );
-
-          return user
-            ? {
-                ...publicUser(user),
-                role: member.role
-              }
-            : null;
-        })
-        .filter(Boolean);
-
-    res.json({
-      server,
-      members
-    });
-  }
-);
-
-// Supprimer un serveur
-app.delete(
-  "/api/servers/:serverId",
-  auth,
-  (req, res) => {
-    const serverIndex =
-      db.servers.findIndex(
-        s =>
-          s.id ===
-          req.params.serverId
-      );
-
-    if (serverIndex === -1) {
-      return res.status(404).json({
-        error:
-          "Serveur introuvable."
-      });
-    }
-
-    const server =
-      db.servers[serverIndex];
-
-    if (
-      server.ownerId !==
-      req.user.id
-    ) {
-      return res.status(403).json({
-        error:
-          "Seul le propriétaire peut supprimer le serveur."
-      });
-    }
-
-    db.servers.splice(
-      serverIndex,
-      1
-    );
-
-    for (const user of db.users) {
-      user.servers =
-        user.servers.filter(
-          serverId =>
-            serverId !==
-            server.id
-        );
-    }
-
-    saveDatabase();
-
-    io.to(`server:${server.id}`).emit(
-      "server:deleted",
-      {
-        serverId: server.id
+        from:
+          publicUser(user)
       }
     );
 
@@ -1042,47 +606,117 @@ app.delete(
   }
 );
 
-// ============================================================
-// MESSAGES PRIVÉS
-// ============================================================
+app.post(
+  "/api/friends/accept",
+  (req, res) => {
+    const user = requireAuth(req, res);
 
-function getConversationId(a, b) {
-  return [a, b]
-    .sort()
-    .join(":");
-}
+    if (!user) return;
+
+    const fromId =
+      String(
+        req.body.userId || ""
+      );
+
+    let requestFound = null;
+
+    for (
+      const request
+      of friendRequests.values()
+    ) {
+      if (
+        request.from === fromId &&
+        request.to === user.id &&
+        request.status === "pending"
+      ) {
+        requestFound =
+          request;
+
+        break;
+      }
+    }
+
+    if (!requestFound) {
+      return res.status(404).json({
+        error:
+          "Demande d'ami introuvable."
+      });
+    }
+
+    requestFound.status =
+      "accepted";
+
+    friendships.set(
+      friendshipKey(
+        user.id,
+        fromId
+      ),
+      true
+    );
+
+    sendToUser(
+      fromId,
+      "friend:accepted",
+      {
+        user:
+          publicUser(user)
+      }
+    );
+
+    res.json({
+      success: true
+    });
+  }
+);
+
+/*
+=========================================================
+MESSAGES PRIVÉS
+=========================================================
+*/
 
 app.get(
   "/api/dms/:userId",
-  auth,
   (req, res) => {
-    const otherUser =
-      findUserById(
-        req.params.userId
-      );
+    const user = requireAuth(req, res);
 
-    if (!otherUser) {
+    if (!user) return;
+
+    const otherId =
+      req.params.userId;
+
+    const other =
+      users.get(otherId);
+
+    if (!other) {
       return res.status(404).json({
         error:
           "Utilisateur introuvable."
       });
     }
 
-    const conversationId =
-      getConversationId(
-        req.user.id,
-        otherUser.id
+    if (
+      !areFriends(
+        user.id,
+        other.id
+      )
+    ) {
+      return res.status(403).json({
+        error:
+          "Vous devez être amis pour discuter."
+      });
+    }
+
+    const key =
+      conversationKey(
+        user.id,
+        other.id
       );
 
     const messages =
-      db.messages.filter(
-        message =>
-          message.conversationId ===
-          conversationId
-      );
+      conversations.get(key) || [];
 
     res.json({
-      conversationId,
       messages
     });
   }
@@ -1090,82 +724,86 @@ app.get(
 
 app.post(
   "/api/dms/:userId",
-  auth,
   (req, res) => {
-    const otherUser =
-      findUserById(
-        req.params.userId
-      );
+    const user = requireAuth(req, res);
 
-    if (!otherUser) {
+    if (!user) return;
+
+    const otherId =
+      req.params.userId;
+
+    const other =
+      users.get(otherId);
+
+    if (!other) {
       return res.status(404).json({
         error:
           "Utilisateur introuvable."
       });
     }
 
-    const {
-      content
-    } = req.body;
-
     if (
-      typeof content !== "string" ||
-      !content.trim()
+      !areFriends(
+        user.id,
+        other.id
+      )
     ) {
-      return res.status(400).json({
+      return res.status(403).json({
         error:
-          "Message vide."
+          "Vous devez être amis pour envoyer un message."
       });
     }
 
-    const conversationId =
-      getConversationId(
-        req.user.id,
-        otherUser.id
-      );
+    const content =
+      String(
+        req.body.content || ""
+      )
+      .trim()
+      .slice(0, 4000);
+
+    if (!content) {
+      return res.status(400).json({
+        error:
+          "Le message est vide."
+      });
+    }
 
     const message = {
       id: id(),
-
-      conversationId,
-
-      senderId:
-        req.user.id,
-
-      receiverId:
-        otherUser.id,
-
-      content:
-        content.trim(),
-
+      senderId: user.id,
+      receiverId: other.id,
+      content,
       createdAt:
-        Date.now()
+        new Date().toISOString()
     };
 
-    db.messages.push(
-      message
-    );
+    const key =
+      conversationKey(
+        user.id,
+        other.id
+      );
 
-    // Évite une base qui grossit sans limite
-    if (db.messages.length > 100000) {
-      db.messages =
-        db.messages.slice(
-          -100000
-        );
+    if (
+      !conversations.has(key)
+    ) {
+      conversations.set(
+        key,
+        []
+      );
     }
 
-    saveDatabase();
+    conversations
+      .get(key)
+      .push(message);
 
-    io.to(
-      `user:${otherUser.id}`
-    ).emit(
+    sendToUser(
+      other.id,
       "dm:new",
       message
     );
 
-    io.to(
-      `user:${req.user.id}`
-    ).emit(
+    sendToUser(
+      user.id,
       "dm:new",
       message
     );
@@ -1176,51 +814,247 @@ app.post(
   }
 );
 
-// ============================================================
-// SOCKET.IO
-// ============================================================
+/*
+=========================================================
+SERVEURS
+=========================================================
+*/
 
-const socketUsers =
-  new Map();
+app.get(
+  "/api/servers",
+  (req, res) => {
+    const user = requireAuth(req, res);
+
+    if (!user) return;
+
+    const result = [];
+
+    for (
+      const serverData
+      of servers.values()
+    ) {
+      const members =
+        serverMembers.get(
+          serverData.id
+        ) || new Set();
+
+      if (
+        members.has(user.id)
+      ) {
+        result.push({
+          id: serverData.id,
+          name: serverData.name,
+          ownerId:
+            serverData.ownerId,
+          inviteCode:
+            serverData.inviteCode,
+          createdAt:
+            serverData.createdAt
+        });
+      }
+    }
+
+    res.json({
+      servers: result
+    });
+  }
+);
+
+app.post(
+  "/api/servers",
+  (req, res) => {
+    const user = requireAuth(req, res);
+
+    if (!user) return;
+
+    const name =
+      String(
+        req.body.name || ""
+      )
+      .trim()
+      .slice(0, 50);
+
+    if (!name) {
+      return res.status(400).json({
+        error:
+          "Le nom du serveur est vide."
+      });
+    }
+
+    const serverData = {
+      id: id(),
+      name,
+      ownerId: user.id,
+      inviteCode:
+        createInviteCode(),
+      createdAt:
+        new Date().toISOString()
+    };
+
+    servers.set(
+      serverData.id,
+      serverData
+    );
+
+    serverMembers.set(
+      serverData.id,
+      new Set([user.id])
+    );
+
+    res.json({
+      server: serverData
+    });
+  }
+);
+
+app.post(
+  "/api/servers/join",
+  (req, res) => {
+    const user = requireAuth(req, res);
+
+    if (!user) return;
+
+    const inviteCode =
+      String(
+        req.body.inviteCode || ""
+      )
+      .trim()
+      .toUpperCase();
+
+    let found = null;
+
+    for (
+      const serverData
+      of servers.values()
+    ) {
+      if (
+        serverData.inviteCode ===
+        inviteCode
+      ) {
+        found = serverData;
+        break;
+      }
+    }
+
+    if (!found) {
+      return res.status(404).json({
+        error:
+          "Code d'invitation invalide."
+      });
+    }
+
+    if (
+      !serverMembers.has(
+        found.id
+      )
+    ) {
+      serverMembers.set(
+        found.id,
+        new Set()
+      );
+    }
+
+    serverMembers
+      .get(found.id)
+      .add(user.id);
+
+    res.json({
+      server: found
+    });
+  }
+);
+
+app.get(
+  "/api/servers/:serverId/members",
+  (req, res) => {
+    const user = requireAuth(req, res);
+
+    if (!user) return;
+
+    const serverData =
+      servers.get(
+        req.params.serverId
+      );
+
+    if (!serverData) {
+      return res.status(404).json({
+        error:
+          "Serveur introuvable."
+      });
+    }
+
+    const members =
+      serverMembers.get(
+        serverData.id
+      ) || new Set();
+
+    if (
+      !members.has(user.id)
+    ) {
+      return res.status(403).json({
+        error:
+          "Tu n'es pas membre de ce serveur."
+      });
+    }
+
+    const result = [];
+
+    for (
+      const memberId
+      of members
+    ) {
+      const member =
+        users.get(memberId);
+
+      if (member) {
+        result.push(
+          publicUser(member)
+        );
+      }
+    }
+
+    res.json({
+      members: result
+    });
+  }
+);
+
+/*
+=========================================================
+SOCKET.IO
+=========================================================
+*/
 
 io.on("connection", socket => {
-  console.log(
-    "Socket connecté :",
-    socket.id
-  );
-
-  // ----------------------------------------------------------
-  // AUTH SOCKET
-  // ----------------------------------------------------------
 
   socket.on(
     "authenticate",
     token => {
-      const user =
-        getUserFromToken(token);
 
-      if (!user) {
-        socket.emit(
-          "auth:error",
-          {
-            error:
-              "Session invalide."
-          }
-        );
-
+      if (!token) {
         return;
       }
 
-      socketUsers.set(
-        socket.id,
-        user.id
-      );
+      const userId =
+        sessions.get(token);
+
+      if (!userId) {
+        return;
+      }
+
+      const user =
+        users.get(userId);
+
+      if (!user) {
+        return;
+      }
 
       socket.userId =
         user.id;
 
-      socket.join(
-        `user:${user.id}`
+      sockets.set(
+        user.id,
+        socket.id
       );
 
       socket.emit(
@@ -1230,493 +1064,119 @@ io.on("connection", socket => {
             publicUser(user)
         }
       );
-
-      console.log(
-        `${user.username} connecté`
-      );
     }
   );
-
-  // ----------------------------------------------------------
-  // SERVEUR
-  // ----------------------------------------------------------
 
   socket.on(
     "server:join",
     serverId => {
-      if (!socket.userId) return;
 
-      const server =
-        db.servers.find(
-          s =>
-            s.id === serverId
+      if (!socket.userId) {
+        return;
+      }
+
+      const members =
+        serverMembers.get(
+          serverId
         );
 
-      if (!server) return;
+      if (!members) {
+        return;
+      }
 
-      const member =
-        server.members.some(
-          m =>
-            m.userId ===
-            socket.userId
-        );
-
-      if (!member) return;
+      if (
+        !members.has(
+          socket.userId
+        )
+      ) {
+        return;
+      }
 
       socket.join(
-        `server:${serverId}`
+        "server:" + serverId
       );
     }
   );
-
-  socket.on(
-    "server:leave",
-    serverId => {
-      socket.leave(
-        `server:${serverId}`
-      );
-    }
-  );
-
-  // ----------------------------------------------------------
-  // VOCAL
-  // ----------------------------------------------------------
-
-  socket.on(
-    "voice:join",
-    data => {
-      if (!socket.userId) return;
-
-      const {
-        serverId,
-        roomId
-      } = data || {};
-
-      if (!serverId || !roomId) {
-        return;
-      }
-
-      const server =
-        db.servers.find(
-          s =>
-            s.id === serverId
-        );
-
-      if (!server) return;
-
-      const member =
-        server.members.some(
-          m =>
-            m.userId ===
-            socket.userId
-        );
-
-      if (!member) return;
-
-      const room =
-        `voice:${serverId}:${roomId}`;
-
-      socket.join(room);
-
-      const users =
-        [];
-
-      const sockets =
-        io.sockets.adapter.rooms.get(
-          room
-        );
-
-      if (sockets) {
-        for (
-          const socketId of sockets
-        ) {
-          const userId =
-            socketUsers.get(
-              socketId
-            );
-
-          const user =
-            findUserById(
-              userId
-            );
-
-          if (user) {
-            users.push(
-              publicUser(user)
-            );
-          }
-        }
-      }
-
-      socket.emit(
-        "voice:users",
-        {
-          users
-        }
-      );
-
-      socket.to(room).emit(
-        "voice:user-joined",
-        {
-          user:
-            publicUser(
-              findUserById(
-                socket.userId
-              )
-            )
-        }
-      );
-    }
-  );
-
-  socket.on(
-    "voice:leave",
-    data => {
-      if (!socket.userId) return;
-
-      const {
-        serverId,
-        roomId
-      } = data || {};
-
-      if (!serverId || !roomId) {
-        return;
-      }
-
-      const room =
-        `voice:${serverId}:${roomId}`;
-
-      socket.leave(room);
-
-      socket.to(room).emit(
-        "voice:user-left",
-        {
-          userId:
-            socket.userId
-        }
-      );
-    }
-  );
-
-  // ----------------------------------------------------------
-  // WEBRTC SIGNALING
-  // ----------------------------------------------------------
-
-  socket.on(
-    "webrtc:offer",
-    data => {
-      if (!socket.userId) return;
-
-      const {
-        targetSocketId,
-        offer
-      } = data || {};
-
-      if (!targetSocketId || !offer) {
-        return;
-      }
-
-      io.to(
-        targetSocketId
-      ).emit(
-        "webrtc:offer",
-        {
-          fromSocketId:
-            socket.id,
-          fromUserId:
-            socket.userId,
-          offer
-        }
-      );
-    }
-  );
-
-  socket.on(
-    "webrtc:answer",
-    data => {
-      if (!socket.userId) return;
-
-      const {
-        targetSocketId,
-        answer
-      } = data || {};
-
-      if (
-        !targetSocketId ||
-        !answer
-      ) {
-        return;
-      }
-
-      io.to(
-        targetSocketId
-      ).emit(
-        "webrtc:answer",
-        {
-          fromSocketId:
-            socket.id,
-          fromUserId:
-            socket.userId,
-          answer
-        }
-      );
-    }
-  );
-
-  socket.on(
-    "webrtc:ice-candidate",
-    data => {
-      if (!socket.userId) return;
-
-      const {
-        targetSocketId,
-        candidate
-      } = data || {};
-
-      if (
-        !targetSocketId ||
-        !candidate
-      ) {
-        return;
-      }
-
-      io.to(
-        targetSocketId
-      ).emit(
-        "webrtc:ice-candidate",
-        {
-          fromSocketId:
-            socket.id,
-          fromUserId:
-            socket.userId,
-          candidate
-        }
-      );
-    }
-  );
-
-  // ----------------------------------------------------------
-  // APPEL DIRECT ENTRE AMIS
-  // ----------------------------------------------------------
-
-  socket.on(
-    "call:invite",
-    data => {
-      if (!socket.userId) return;
-
-      const {
-        targetUserId,
-        callType
-      } = data || {};
-
-      if (!targetUserId) return;
-
-      const target =
-        findUserById(
-          targetUserId
-        );
-
-      if (!target) return;
-
-      io.to(
-        `user:${targetUserId}`
-      ).emit(
-        "call:incoming",
-        {
-          from:
-            publicUser(
-              findUserById(
-                socket.userId
-              )
-            ),
-          callType:
-            callType === "video"
-              ? "video"
-              : "audio"
-        }
-      );
-    }
-  );
-
-  socket.on(
-    "call:accept",
-    data => {
-      if (!socket.userId) return;
-
-      const {
-        targetUserId
-      } = data || {};
-
-      if (!targetUserId) return;
-
-      io.to(
-        `user:${targetUserId}`
-      ).emit(
-        "call:accepted",
-        {
-          user:
-            publicUser(
-              findUserById(
-                socket.userId
-              )
-            )
-        }
-      );
-    }
-  );
-
-  socket.on(
-    "call:decline",
-    data => {
-      if (!socket.userId) return;
-
-      const {
-        targetUserId
-      } = data || {};
-
-      if (!targetUserId) return;
-
-      io.to(
-        `user:${targetUserId}`
-      ).emit(
-        "call:declined",
-        {
-          userId:
-            socket.userId
-        }
-      );
-    }
-  );
-
-  socket.on(
-    "call:end",
-    data => {
-      if (!socket.userId) return;
-
-      const {
-        targetUserId
-      } = data || {};
-
-      if (!targetUserId) return;
-
-      io.to(
-        `user:${targetUserId}`
-      ).emit(
-        "call:ended",
-        {
-          userId:
-            socket.userId
-        }
-      );
-    }
-  );
-
-  // ----------------------------------------------------------
-  // PARTAGE D'ÉCRAN
-  // ----------------------------------------------------------
-
-  socket.on(
-    "screen:started",
-    data => {
-      if (!socket.userId) return;
-
-      const {
-        room
-      } = data || {};
-
-      if (!room) return;
-
-      socket.to(room).emit(
-        "screen:started",
-        {
-          user:
-            publicUser(
-              findUserById(
-                socket.userId
-              )
-            )
-        }
-      );
-    }
-  );
-
-  socket.on(
-    "screen:stopped",
-    data => {
-      if (!socket.userId) return;
-
-      const {
-        room
-      } = data || {};
-
-      if (!room) return;
-
-      socket.to(room).emit(
-        "screen:stopped",
-        {
-          userId:
-            socket.userId
-        }
-      );
-    }
-  );
-
-  // ----------------------------------------------------------
-  // DISCONNECT
-  // ----------------------------------------------------------
 
   socket.on(
     "disconnect",
     () => {
-      const userId =
-        socketUsers.get(
-          socket.id
-        );
 
-      socketUsers.delete(
-        socket.id
-      );
-
-      if (userId) {
-        console.log(
-          "Utilisateur déconnecté :",
-          userId
+      if (
+        socket.userId &&
+        sockets.get(
+          socket.userId
+        ) === socket.id
+      ) {
+        sockets.delete(
+          socket.userId
         );
       }
     }
   );
+
 });
 
-// ============================================================
-// ROUTE PRINCIPALE
-// ============================================================
+/*
+=========================================================
+PAGE FALLBACK
+=========================================================
+*/
 
-app.get(
-  "/health",
-  (req, res) => {
-    res.json({
-      status: "ok",
-      service: "NovaChat",
-      time: new Date().toISOString()
+app.use(
+  (req, res, next) => {
+
+    if (
+      req.method === "GET" &&
+      !req.path.startsWith("/api/")
+    ) {
+      return res.sendFile(
+        path.join(
+          __dirname,
+          "public",
+          "index.html"
+        )
+      );
+    }
+
+    next();
+  }
+);
+
+/*
+=========================================================
+ERREURS
+=========================================================
+*/
+
+app.use(
+  (err, req, res, next) => {
+
+    console.error(err);
+
+    res.status(500).json({
+      error:
+        "Erreur interne du serveur."
     });
   }
 );
 
-// ============================================================
-// START
-// ============================================================
+/*
+=========================================================
+START
+=========================================================
+*/
 
 server.listen(
   PORT,
   "0.0.0.0",
   () => {
-    console.log(
-      `NovaChat lancé sur le port ${PORT}`
-    );
 
     console.log(
-      `http://localhost:${PORT}`
+      "NovaChat lancé sur le port " +
+      PORT
     );
+
   }
 );
 ```
