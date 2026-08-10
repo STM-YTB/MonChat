@@ -5,615 +5,377 @@ const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
 
+// ===============================
+// FICHIERS DU SITE
+// ===============================
+
 app.use(express.static(path.join(__dirname, "public")));
 
-app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+app.use((req, res) => {
+    res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-/*
- * ============================================================
- * NOVACHAT - SERVEUR TEMPS RÉEL
- * ============================================================
- *
- * Le serveur gère :
- * - présence des utilisateurs
- * - messages publics
- * - messages privés
- * - salons vocaux
- * - signalisation WebRTC
- * - offres / réponses WebRTC
- * - ICE candidates
- *
- * Les données sont conservées en mémoire.
- * Un redémarrage du serveur remet donc les données à zéro.
- */
-
-const wss = new WebSocket.Server({ server });
+// ===============================
+// DONNÉES EN MÉMOIRE
+// ===============================
 
 const clients = new Map();
 const messages = new Map();
-const privateMessages = new Map();
 
-const users = [
-  {
-    id: "alex",
-    username: "Alex",
-    displayName: "Alex",
-    status: "En ligne",
-    avatar: "A",
-    description: "J'aime coder et jouer.",
-    role: "Administrateur"
-  },
-  {
-    id: "lina",
-    username: "Lina",
-    displayName: "Lina",
-    status: "En ligne",
-    avatar: "L",
-    description: "Créatrice de contenu 🎨",
-    role: "Modératrice"
-  },
-  {
-    id: "max",
-    username: "Max",
-    displayName: "Max",
-    status: "En ligne",
-    avatar: "M",
-    description: "Toujours prêt pour une partie.",
-    role: "Membre"
-  },
-  {
-    id: "zoe",
-    username: "Zoe",
-    displayName: "Zoe",
-    status: "Absente",
-    avatar: "Z",
-    description: "Musique, jeux et café ☕",
-    role: "Membre"
-  },
-  {
-    id: "nathan",
-    username: "Nathan",
-    displayName: "Nathan",
-    status: "En ligne",
-    avatar: "N",
-    description: "Développeur full-stack.",
-    role: "Membre"
-  },
-  {
-    id: "emma",
-    username: "Emma",
-    displayName: "Emma",
-    status: "Hors ligne",
-    avatar: "E",
-    description: "Bienvenue sur NovaChat !",
-    role: "Membre"
-  },
-  {
-    id: "leo",
-    username: "Leo",
-    displayName: "Leo",
-    status: "En ligne",
-    avatar: "L",
-    description: "Gaming 🎮",
-    role: "Membre"
-  },
-  {
-    id: "chloe",
-    username: "Chloe",
-    displayName: "Chloe",
-    status: "En ligne",
-    avatar: "C",
-    description: "Je teste NovaChat.",
-    role: "Membre"
-  },
-  {
-    id: "sam",
-    username: "Sam",
-    displayName: "Sam",
-    status: "Ne pas déranger",
-    avatar: "S",
-    description: "Concentration maximale.",
-    role: "Membre"
-  },
-  {
-    id: "tom",
-    username: "Tom",
-    displayName: "Tom",
-    status: "Hors ligne",
-    avatar: "T",
-    description: "Fan de jeux indépendants.",
-    role: "Membre"
-  }
-];
+messages.set("general", [
+    {
+        id: "m1",
+        channel: "general",
+        username: "NovaChat",
+        content: "Bienvenue sur NovaChat ! 🚀",
+        time: Date.now() - 3600000
+    },
+    {
+        id: "m2",
+        channel: "general",
+        username: "NovaChat",
+        content: "Rejoins un salon vocal pour tester le micro 🎙️",
+        time: Date.now() - 1800000
+    }
+]);
 
-const demoMessages = [
-  {
-    id: "m1",
-    channel: "general",
-    userId: "alex",
-    username: "Alex",
-    content: "Bienvenue sur NovaChat ! 🚀",
-    time: Date.now() - 1000 * 60 * 70,
-    reactions: {
-      "🚀": ["lina", "max"],
-      "❤️": ["zoe"]
-    }
-  },
-  {
-    id: "m2",
-    channel: "general",
-    userId: "lina",
-    username: "Lina",
-    content: "L'interface commence vraiment à prendre forme 😎",
-    time: Date.now() - 1000 * 60 * 60,
-    reactions: {
-      "😎": ["alex"]
-    }
-  },
-  {
-    id: "m3",
-    channel: "general",
-    userId: "max",
-    username: "Max",
-    content: "Le vocal fonctionne aussi ?",
-    time: Date.now() - 1000 * 60 * 40,
-    reactions: {
-      "🎙️": ["alex", "lina"]
-    }
-  },
-  {
-    id: "m4",
-    channel: "general",
-    userId: "alex",
-    username: "Alex",
-    content: "Oui ! Rejoins le salon vocal et autorise ton micro.",
-    time: Date.now() - 1000 * 60 * 35,
-    reactions: {
-      "🔥": ["max", "leo"]
-    }
-  },
-  {
-    id: "m5",
-    channel: "general",
-    userId: "zoe",
-    username: "Zoe",
-    content: "On pourrait faire une soirée gaming ce soir 🎮",
-    time: Date.now() - 1000 * 60 * 20,
-    reactions: {
-      "🎮": ["leo", "max"],
-      "❤️": ["lina"]
-    }
-  }
-];
-
-messages.set("general", demoMessages);
+// ===============================
+// OUTILS
+// ===============================
 
 function send(ws, data) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(data));
-  }
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(data));
+    }
 }
 
 function broadcast(data, except = null) {
-  for (const client of clients.values()) {
-    if (client.ws !== except) {
-      send(client.ws, data);
+    for (const client of clients.values()) {
+        if (client.ws !== except) {
+            send(client.ws, data);
+        }
     }
-  }
 }
 
-function broadcastUsers() {
-  const online = [...clients.values()].map(client => ({
-    id: client.id,
-    username: client.username,
-    displayName: client.username,
-    avatar: client.username.charAt(0).toUpperCase(),
-    status: "En ligne"
-  }));
-
-  broadcast({
-    type: "presence",
-    users: online
-  });
+function getUsers() {
+    return [...clients.values()].map(client => ({
+        id: client.id,
+        username: client.username,
+        avatar: client.username.charAt(0).toUpperCase(),
+        status: "En ligne",
+        voiceRoom: client.voiceRoom
+    }));
 }
 
-function getPrivateKey(a, b) {
-  return [a, b].sort().join(":");
+function leaveVoice(client) {
+    if (!client || !client.voiceRoom) {
+        return;
+    }
+
+    const room = client.voiceRoom;
+
+    client.voiceRoom = null;
+
+    broadcast({
+        type: "voice-user-left",
+        room: room,
+        userId: client.id
+    });
 }
 
-function sendHistory(ws, channel) {
-  send(ws, {
-    type: "history",
-    channel,
-    messages: messages.get(channel) || []
-  });
-}
+// ===============================
+// WEBSOCKET
+// ===============================
 
 wss.on("connection", ws => {
-  let client = null;
 
-  ws.on("message", raw => {
-    let data;
+    let client = null;
 
-    try {
-      data = JSON.parse(raw.toString());
-    } catch {
-      return;
-    }
+    console.log("Nouvelle connexion WebSocket");
 
-    /*
-     * --------------------------------------------------------
-     * CONNEXION
-     * --------------------------------------------------------
-     */
+    ws.on("message", raw => {
 
-    if (data.type === "login") {
-      const username =
-        String(data.username || "Utilisateur")
-          .trim()
-          .slice(0, 24);
+        let data;
 
-      const id =
-        `${username.toLowerCase().replace(/[^a-z0-9]/g, "")}-${Math.random()
-          .toString(36)
-          .slice(2, 7)}`;
-
-      client = {
-        id,
-        username,
-        ws,
-        voiceRoom: null
-      };
-
-      clients.set(id, client);
-
-      send(ws, {
-        type: "login-success",
-        user: {
-          id,
-          username,
-          avatar: username.charAt(0).toUpperCase()
+        try {
+            data = JSON.parse(raw.toString());
+        } catch (error) {
+            console.log("Message invalide reçu.");
+            return;
         }
-      });
 
-      sendHistory(ws, "general");
-      broadcastUsers();
+        // ===============================
+        // CONNEXION
+        // ===============================
 
-      return;
-    }
+        if (data.type === "login") {
 
-    if (!client) return;
+            const username =
+                String(data.username || "Utilisateur")
+                    .trim()
+                    .slice(0, 24) || "Utilisateur";
 
-    /*
-     * --------------------------------------------------------
-     * CHAT PUBLIC
-     * --------------------------------------------------------
-     */
+            const id =
+                "u-" +
+                Math.random()
+                    .toString(36)
+                    .substring(2, 10);
 
-    if (data.type === "message") {
-      const channel = String(data.channel || "general");
-      const content = String(data.content || "").trim();
+            client = {
+                ws,
+                id,
+                username,
+                voiceRoom: null
+            };
 
-      if (!content) return;
+            clients.set(id, client);
 
-      const message = {
-        id: "msg-" + Date.now() + "-" + Math.random().toString(36).slice(2),
-        channel,
-        userId: client.id,
-        username: client.username,
-        content: content.slice(0, 4000),
-        time: Date.now(),
-        reactions: {}
-      };
+            send(ws, {
+                type: "login-success",
+                user: {
+                    id,
+                    username,
+                    avatar: username.charAt(0).toUpperCase(),
+                    status: "En ligne"
+                }
+            });
 
-      if (!messages.has(channel)) {
-        messages.set(channel, []);
-      }
+            send(ws, {
+                type: "history",
+                channel: "general",
+                messages: messages.get("general") || []
+            });
 
-      messages.get(channel).push(message);
+            broadcast({
+                type: "presence",
+                users: getUsers()
+            });
 
-      if (messages.get(channel).length > 200) {
-        messages.get(channel).shift();
-      }
+            console.log(username + " vient de se connecter.");
 
-      broadcast({
-        type: "new-message",
-        message
-      });
+            return;
+        }
 
-      return;
-    }
+        if (!client) {
+            return;
+        }
 
-    /*
-     * --------------------------------------------------------
-     * RÉACTION
-     * --------------------------------------------------------
-     */
+        // ===============================
+        // HISTORIQUE DES MESSAGES
+        // ===============================
 
-    if (data.type === "reaction") {
-      const channel = String(data.channel || "general");
-      const messageId = String(data.messageId || "");
-      const emoji = String(data.emoji || "");
+        if (data.type === "history") {
 
-      const channelMessages = messages.get(channel) || [];
-      const message = channelMessages.find(m => m.id === messageId);
+            const channel =
+                String(data.channel || "general");
 
-      if (!message || !emoji) return;
+            send(ws, {
+                type: "history",
+                channel,
+                messages: messages.get(channel) || []
+            });
 
-      if (!message.reactions) {
-        message.reactions = {};
-      }
+            return;
+        }
 
-      if (!message.reactions[emoji]) {
-        message.reactions[emoji] = [];
-      }
+        // ===============================
+        // ENVOYER UN MESSAGE
+        // ===============================
 
-      const usersReacted = message.reactions[emoji];
-      const index = usersReacted.indexOf(client.id);
+        if (data.type === "send-message") {
 
-      if (index >= 0) {
-        usersReacted.splice(index, 1);
-      } else {
-        usersReacted.push(client.id);
-      }
+            const channel =
+                String(data.channel || "general");
 
-      broadcast({
-        type: "reaction-update",
-        channel,
-        messageId,
-        reactions: message.reactions
-      });
+            const content =
+                String(data.content || "")
+                    .trim()
+                    .slice(0, 4000);
 
-      return;
-    }
+            if (!content) {
+                return;
+            }
 
-    /*
-     * --------------------------------------------------------
-     * SUPPRESSION
-     * --------------------------------------------------------
-     */
+            if (!messages.has(channel)) {
+                messages.set(channel, []);
+            }
 
-    if (data.type === "delete-message") {
-      const channel = String(data.channel || "general");
-      const messageId = String(data.messageId || "");
+            const message = {
+                id:
+                    "m-" +
+                    Date.now() +
+                    "-" +
+                    Math.random()
+                        .toString(36)
+                        .substring(2, 7),
 
-      const channelMessages = messages.get(channel) || [];
-      const index = channelMessages.findIndex(m => m.id === messageId);
+                channel,
 
-      if (index === -1) return;
+                userId: client.id,
 
-      if (channelMessages[index].userId !== client.id) {
-        return;
-      }
+                username: client.username,
 
-      channelMessages.splice(index, 1);
+                content,
 
-      broadcast({
-        type: "message-deleted",
-        channel,
-        messageId
-      });
+                time: Date.now()
+            };
 
-      return;
-    }
+            messages.get(channel).push(message);
 
-    /*
-     * --------------------------------------------------------
-     * MODIFICATION
-     * --------------------------------------------------------
-     */
+            broadcast({
+                type: "new-message",
+                message
+            });
 
-    if (data.type === "edit-message") {
-      const channel = String(data.channel || "general");
-      const messageId = String(data.messageId || "");
-      const content = String(data.content || "").trim();
+            return;
+        }
 
-      const channelMessages = messages.get(channel) || [];
-      const message = channelMessages.find(m => m.id === messageId);
+        // ===============================
+        // ENTRER DANS UN VOCAL
+        // ===============================
 
-      if (!message || message.userId !== client.id || !content) {
-        return;
-      }
+        if (data.type === "voice-join") {
 
-      message.content = content.slice(0, 4000);
-      message.edited = true;
+            const room =
+                String(data.room || "general");
 
-      broadcast({
-        type: "message-edited",
-        channel,
-        message
-      });
+            if (client.voiceRoom) {
+                leaveVoice(client);
+            }
 
-      return;
-    }
+            client.voiceRoom = room;
 
-    /*
-     * --------------------------------------------------------
-     * MESSAGES PRIVÉS
-     * --------------------------------------------------------
-     */
+            const peers = [...clients.values()]
+                .filter(other =>
+                    other.id !== client.id &&
+                    other.voiceRoom === room
+                )
+                .map(other => ({
+                    id: other.id,
+                    username: other.username
+                }));
 
-    if (data.type === "private-message") {
-      const receiverId = String(data.receiverId || "");
-      const content = String(data.content || "").trim();
+            send(ws, {
+                type: "voice-peers",
+                room,
+                peers
+            });
 
-      if (!receiverId || !content) return;
+            broadcast(
+                {
+                    type: "voice-user-joined",
+                    room,
+                    user: {
+                        id: client.id,
+                        username: client.username
+                    }
+                },
+                ws
+            );
 
-      const receiver = clients.get(receiverId);
+            console.log(
+                client.username +
+                " rejoint le vocal " +
+                room
+            );
 
-      if (!receiver) {
-        send(ws, {
-          type: "error-message",
-          message: "Cette personne n'est pas actuellement connectée."
-        });
-        return;
-      }
+            return;
+        }
 
-      const key = getPrivateKey(client.id, receiverId);
+        // ===============================
+        // QUITTER LE VOCAL
+        // ===============================
 
-      if (!privateMessages.has(key)) {
-        privateMessages.set(key, []);
-      }
+        if (data.type === "voice-leave") {
 
-      const message = {
-        id: "dm-" + Date.now() + Math.random().toString(36).slice(2),
-        senderId: client.id,
-        senderName: client.username,
-        receiverId,
-        content: content.slice(0, 4000),
-        time: Date.now()
-      };
+            leaveVoice(client);
 
-      privateMessages.get(key).push(message);
+            return;
+        }
 
-      send(receiver.ws, {
-        type: "private-message",
-        message
-      });
+        // ===============================
+        // WEBRTC
+        // ===============================
 
-      send(ws, {
-        type: "private-message",
-        message
-      });
-
-      return;
-    }
-
-    if (data.type === "private-history") {
-      const receiverId = String(data.receiverId || "");
-      const key = getPrivateKey(client.id, receiverId);
-
-      send(ws, {
-        type: "private-history",
-        receiverId,
-        messages: privateMessages.get(key) || []
-      });
-
-      return;
-    }
-
-    /*
-     * --------------------------------------------------------
-     * ENTRÉE DANS UN SALON VOCAL
-     * --------------------------------------------------------
-     */
-
-    if (data.type === "voice-join") {
-      const room = String(data.room || "general");
-
-      if (client.voiceRoom) {
-        client.voiceRoom = null;
-      }
-
-      client.voiceRoom = room;
-
-      const peers = [];
-
-      for (const other of clients.values()) {
         if (
-          other.id !== client.id &&
-          other.voiceRoom === room
+            data.type === "webrtc-offer" ||
+            data.type === "webrtc-answer" ||
+            data.type === "webrtc-ice"
         ) {
-          peers.push({
-            id: other.id,
-            username: other.username
-          });
+
+            const targetId =
+                String(data.targetId || "");
+
+            const target =
+                clients.get(targetId);
+
+            if (!target) {
+                return;
+            }
+
+            send(target.ws, {
+                ...data,
+                senderId: client.id,
+                senderName: client.username
+            });
+
+            return;
         }
-      }
 
-      send(ws, {
-        type: "voice-peers",
-        room,
-        peers
-      });
+    });
 
-      broadcast(
-        {
-          type: "voice-user-joined",
-          room,
-          user: {
-            id: client.id,
-            username: client.username
-          }
-        },
-        ws
-      );
+    // ===============================
+    // DÉCONNEXION
+    // ===============================
 
-      return;
-    }
+    ws.on("close", () => {
 
-    /*
-     * --------------------------------------------------------
-     * QUITTER LE VOCAL
-     * --------------------------------------------------------
-     */
+        if (!client) {
+            return;
+        }
 
-    if (data.type === "voice-leave") {
-      const room = client.voiceRoom;
+        console.log(
+            client.username +
+            " vient de se déconnecter."
+        );
 
-      if (!room) return;
+        leaveVoice(client);
 
-      client.voiceRoom = null;
+        clients.delete(client.id);
 
-      broadcast({
-        type: "voice-user-left",
-        room,
-        userId: client.id
-      });
+        broadcast({
+            type: "presence",
+            users: getUsers()
+        });
+    });
 
-      return;
-    }
+    ws.on("error", error => {
+        console.log(
+            "Erreur WebSocket :",
+            error.message
+        );
+    });
 
-    /*
-     * --------------------------------------------------------
-     * SIGNALISATION WEBRTC
-     * --------------------------------------------------------
-     */
-
-    if (
-      data.type === "webrtc-offer" ||
-      data.type === "webrtc-answer" ||
-      data.type === "webrtc-ice"
-    ) {
-      const targetId = String(data.targetId || "");
-      const target = clients.get(targetId);
-
-      if (!target) return;
-
-      send(target.ws, {
-        ...data,
-        senderId: client.id,
-        senderName: client.username
-      });
-
-      return;
-    }
-  });
-
-  ws.on("close", () => {
-    if (!client) return;
-
-    const oldRoom = client.voiceRoom;
-
-    clients.delete(client.id);
-
-    if (oldRoom) {
-      broadcast({
-        type: "voice-user-left",
-        room: oldRoom,
-        userId: client.id
-      });
-    }
-
-    broadcastUsers();
-  });
 });
 
+// ===============================
+// LANCEMENT DU SERVEUR
+// ===============================
+
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`NovaChat lancé sur le port ${PORT}`);
+
+    console.log("");
+    console.log("=================================");
+    console.log("       NOVACHAT EST EN LIGNE");
+    console.log("=================================");
+    console.log("");
+    console.log(
+        "Serveur lancé sur le port " + PORT
+    );
+    console.log("");
+
 });
