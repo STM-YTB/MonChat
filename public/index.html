@@ -1,86 +1,2992 @@
-<!doctype html>
-<html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NovaChat</title>
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NovaChat</title>
+
+<script src="/socket.io/socket.io.js"></script>
+
 <style>
-:root{--bg:#0d1017;--panel:#151922;--panel2:#1d2330;--text:#f5f6fa;--muted:#8992a5;--accent:#5865f2;--green:#35d07f;--danger:#ed5364;--border:#2a3040}
-*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:var(--text);overflow:hidden}button,input,textarea{font:inherit}button{cursor:pointer;color:inherit;border:0}
-#loginScreen{position:fixed;inset:0;display:grid;place-items:center;background:radial-gradient(circle at 50% 20%,#27315b,#0d1017 60%)}.login{width:min(430px,92vw);padding:38px;border:1px solid var(--border);border-radius:22px;background:var(--panel);box-shadow:0 30px 90px #0008}.login h1{margin:0 0 8px}.login p{color:var(--muted);margin-bottom:25px}.login-input{width:100%;padding:14px;border-radius:12px;border:1px solid var(--border);background:#0d1017;color:white;outline:0}.login-button{width:100%;margin-top:12px;padding:14px;border-radius:12px;background:var(--accent);font-weight:800}
-#app{display:none;height:100vh;grid-template-columns:76px 250px 1fr 230px}.servers{background:#0a0d13;padding:12px 10px;display:flex;flex-direction:column;gap:10px;align-items:center}.server{width:52px;height:52px;border-radius:16px;background:var(--panel2);font-weight:900}.server:hover,.server.active{background:var(--accent)}.sep{width:35px;height:1px;background:var(--border)}
-.sidebar{background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;min-width:0}.server-title{height:65px;padding:12px 15px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}.server-title small{display:block;color:var(--muted);font-size:11px;margin-top:2px}.scroll{padding:12px;overflow:auto;flex:1}.cat{display:flex;justify-content:space-between;color:var(--muted);font-size:11px;font-weight:900;margin:15px 5px 6px}.channel{width:100%;padding:9px;border-radius:8px;background:transparent;text-align:left;color:#b9c0cf;display:flex;gap:9px;align-items:center}.channel:hover,.channel.active{background:var(--panel2);color:white}.userbox{padding:10px;border-top:1px solid var(--border);display:flex;gap:9px;align-items:center}.avatar{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--accent),#31384a);display:grid;place-items:center;font-weight:900}.uinfo{flex:1;min-width:0}.uinfo strong,.uinfo span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.uinfo span{font-size:11px;color:var(--green)}
-.chat{display:flex;flex-direction:column;min-width:0}.header{height:65px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 18px;gap:12px}.hash{font-size:25px;color:var(--muted)}.desc{font-size:11px;color:var(--muted)}.actions{margin-left:auto}.search{width:190px;padding:9px 11px;border-radius:9px;border:1px solid var(--border);background:var(--panel);color:white}.messages{flex:1;overflow:auto;padding:20px}.message{display:flex;gap:10px;margin-bottom:15px}.body{max-width:min(760px,80%)}.head{display:flex;gap:8px;align-items:center}.name{font-weight:800}.time{font-size:10px;color:var(--muted)}.text{white-space:pre-wrap;overflow-wrap:anywhere;color:#dce1eb}.composerWrap{padding:12px 18px}.composer{display:flex;gap:8px;align-items:flex-end;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:7px}.composer textarea{flex:1;resize:none;background:transparent;color:white;border:0;outline:0;min-height:38px;padding:9px}.send{width:40px;height:40px;border-radius:11px;background:var(--accent)}
-.members{background:var(--panel);border-left:1px solid var(--border);padding:16px;overflow:auto}.mtitle{font-size:11px;color:var(--muted);font-weight:900;margin:6px 0 10px}.member{display:flex;gap:9px;align-items:center;padding:8px;border-radius:9px}.member:hover{background:var(--panel2)}.memberName{font-weight:800;font-size:13px}
-.voice{position:fixed;left:350px;right:250px;bottom:18px;background:#10141d;border:1px solid var(--border);border-radius:18px;padding:15px;z-index:20;box-shadow:0 20px 70px #0009;display:none}.vtop{display:flex;align-items:center;margin-bottom:12px}.vtop strong{flex:1}.vusers{display:flex;gap:9px;flex-wrap:wrap}.vuser{min-width:110px;padding:12px;background:var(--panel2);border:1px solid var(--border);border-radius:13px;text-align:center}.controls{display:flex;justify-content:center;gap:8px;margin-top:13px}.control{width:45px;height:45px;border-radius:13px;background:#242a38}.control.active{background:var(--accent)}.leave{background:var(--danger)}#audio{position:absolute;left:-9999px;width:1px;height:1px}
-@media(max-width:900px){#app{grid-template-columns:60px 210px 1fr}.members{display:none}.voice{left:280px;right:10px}}@media(max-width:650px){#app{grid-template-columns:60px 1fr}.sidebar{display:none}.voice{left:10px;right:10px}}
-</style></head><body>
+* {
+  box-sizing: border-box;
+}
 
-<div id="loginScreen"><div class="login"><h1>Bienvenue sur NovaChat</h1><p>Une nouvelle façon de discuter, jouer et rester connecté.</p><input id="username" class="login-input" maxlength="24" placeholder="Ton nom d'utilisateur" autocomplete="off"><button id="login" class="login-button">Entrer dans NovaChat</button></div></div>
+:root {
+  --bg: #111214;
+  --sidebar: #1e1f22;
+  --sidebar2: #2b2d31;
+  --chat: #313338;
+  --input: #383a40;
+  --hover: #404249;
+  --active: #404249;
+  --text: #f2f3f5;
+  --muted: #949ba4;
+  --accent: #5865f2;
+  --green: #23a55a;
+  --red: #ed4245;
+  --border: rgba(255,255,255,.06);
+}
 
-<div id="app">
-<aside class="servers"><button class="server active">N</button><button class="server">G</button><button class="server">M</button><div class="sep"></div><button class="server">+</button></aside>
-<aside class="sidebar"><div class="server-title"><div><strong>Nova Lounge</strong><small>Communauté officielle</small></div><button>•••</button></div><div class="scroll">
-<div class="cat"><span>TEXTUEL</span><span>+</span></div>
-<button class="channel active" data-channel="general"># général</button><button class="channel" data-channel="gaming"># gaming</button><button class="channel" data-channel="entraide"># entraide</button>
-<div class="cat"><span>VOCAL</span><span>+</span></div>
-<button class="channel voice-channel" data-room="general">◉ Salon général</button><button class="channel voice-channel" data-room="gaming">◉ Gaming</button><button class="channel voice-channel" data-room="chill">◉ Chill</button>
-</div><div class="userbox"><div id="myAvatar" class="avatar">?</div><div class="uinfo"><strong id="myName">Utilisateur</strong><span>En ligne</span></div><button>⚙</button></div></aside>
-<main class="chat"><header class="header"><div class="hash">#</div><div><strong id="chatName">général</strong><div class="desc">Discutez librement avec la communauté.</div></div><div class="actions"><input id="search" class="search" placeholder="Rechercher..."></div></header><div id="messages" class="messages"></div><div class="composerWrap"><div class="composer"><button id="emoji">🙂</button><textarea id="input" rows="1" placeholder="Écrire un message..."></textarea><button id="send" class="send">➤</button></div></div></main>
-<aside class="members"><div class="mtitle">En ligne</div><div id="online"></div></aside></div>
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #1a1b1e transparent;
+}
 
-<div id="voice" class="voice"><div class="vtop"><strong>🎙️ <span id="roomName">Salon vocal</span></strong><span id="status" style="color:var(--green)">Connecté</span></div><div id="vusers" class="vusers"></div><div id="audio"></div><div class="controls"><button id="mute" class="control active">🎤</button><button id="camera" class="control">📹</button><button id="screen" class="control">🖥️</button><button id="leave" class="control leave">☎</button></div></div>
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  cursor: pointer;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* =========================
+   LOGIN
+========================= */
+
+#loginScreen {
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(circle at 20% 20%, #5865f233, transparent 35%),
+    radial-gradient(circle at 80% 70%, #7289da22, transparent 35%),
+    #111214;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.login-card {
+  width: 420px;
+  padding: 38px;
+  background: #1e1f22;
+  border-radius: 12px;
+  box-shadow: 0 20px 70px #0008;
+  text-align: center;
+}
+
+.login-logo {
+  width: 70px;
+  height: 70px;
+  margin: auto;
+  border-radius: 22px;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  font-weight: 900;
+}
+
+.login-card h1 {
+  margin: 22px 0 8px;
+}
+
+.login-card p {
+  color: var(--muted);
+}
+
+.login-input {
+  width: 100%;
+  margin-top: 20px;
+  padding: 14px;
+  background: #111214;
+  border: 1px solid #000;
+  border-radius: 6px;
+  outline: none;
+  color: white;
+}
+
+.login-input:focus {
+  border-color: var(--accent);
+}
+
+.login-button {
+  width: 100%;
+  margin-top: 15px;
+  padding: 14px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  font-weight: bold;
+}
+
+.login-button:hover {
+  filter: brightness(1.1);
+}
+
+#loginStatus {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* =========================
+   APP
+========================= */
+
+#app {
+  height: 100vh;
+  display: flex;
+}
+
+/* SERVERS */
+
+.server-bar {
+  width: 72px;
+  background: #111214;
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+}
+
+.server {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #313338;
+  color: #dbdee1;
+  font-size: 18px;
+  font-weight: bold;
+  transition: .15s;
+}
+
+.server:hover,
+.server.active {
+  border-radius: 16px;
+  background: var(--accent);
+  color: white;
+}
+
+.server.add {
+  color: #23a55a;
+  font-size: 25px;
+}
+
+.server-separator {
+  width: 32px;
+  height: 1px;
+  background: #35373c;
+}
+
+/* CHANNEL SIDEBAR */
+
+.channel-sidebar {
+  width: 240px;
+  background: var(--sidebar);
+  display: flex;
+  flex-direction: column;
+}
+
+.server-header {
+  height: 48px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  font-weight: bold;
+  box-shadow: 0 1px 4px #0003;
+}
+
+.server-header button {
+  background: none;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.channel-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 8px;
+}
+
+.category {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 8px 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: .5px;
+}
+
+.category button {
+  background: none;
+  color: var(--muted);
+}
+
+.channel {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+  text-align: left;
+  margin-bottom: 2px;
+}
+
+.channel:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.channel.active {
+  background: var(--active);
+  color: white;
+}
+
+.channel-icon {
+  font-size: 21px;
+  color: #949ba4;
+}
+
+.voice-channel {
+  position: relative;
+}
+
+.voice-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* USER BOX */
+
+.user-box {
+  height: 58px;
+  padding: 8px;
+  background: #232428;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  position: relative;
+}
+
+.presence {
+  position: absolute;
+  right: -2px;
+  bottom: -1px;
+  width: 11px;
+  height: 11px;
+  border: 3px solid #232428;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.user-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.user-info strong,
+.user-info small {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.user-info small {
+  color: var(--muted);
+}
+
+.user-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.small-btn {
+  width: 30px;
+  height: 30px;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 5px;
+}
+
+.small-btn:hover {
+  background: var(--hover);
+  color: white;
+}
+
+/* CHAT */
+
+.chat {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--chat);
+}
+
+.chat-header {
+  height: 48px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.hash {
+  color: var(--muted);
+  font-size: 27px;
+}
+
+.chat-name {
+  font-weight: bold;
+}
+
+.chat-description {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.header-spacer {
+  flex: 1;
+}
+
+.header-button {
+  background: transparent;
+  color: #b5bac1;
+  font-size: 19px;
+  width: 34px;
+  height: 34px;
+  border-radius: 5px;
+}
+
+.header-button:hover {
+  background: var(--hover);
+  color: white;
+}
+
+/* MESSAGES */
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 0;
+}
+
+.message {
+  display: flex;
+  gap: 12px;
+  padding: 5px 18px;
+}
+
+.message:hover {
+  background: #2e3035;
+}
+
+.message-avatar {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+}
+
+.message-content {
+  min-width: 0;
+}
+
+.message-author {
+  font-weight: bold;
+}
+
+.message-time {
+  color: var(--muted);
+  font-size: 10px;
+  margin-left: 6px;
+}
+
+.message-text {
+  margin-top: 3px;
+  color: #dbdee1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* COMPOSER */
+
+.composer-area {
+  padding: 0 16px 22px;
+}
+
+.composer {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--input);
+  border-radius: 8px;
+  padding: 5px 8px;
+}
+
+.composer button {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: transparent;
+  color: #b5bac1;
+  font-size: 20px;
+}
+
+.composer button:hover {
+  color: white;
+}
+
+#messageInput {
+  flex: 1;
+  resize: none;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: white;
+  padding: 8px;
+  max-height: 120px;
+}
+
+/* MEMBERS */
+
+.member-sidebar {
+  width: 230px;
+  background: #2b2d31;
+  padding: 18px 10px;
+  overflow-y: auto;
+}
+
+.member-title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: bold;
+  padding: 5px 8px;
+}
+
+.member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.member:hover {
+  background: var(--hover);
+}
+
+.member-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.member-name {
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.member-status {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* =========================
+   VOCAL
+========================= */
+
+.voice-panel {
+  position: fixed;
+  bottom: 0;
+  left: 72px;
+  width: 240px;
+  background: #111214;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  z-index: 30;
+}
+
+.voice-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.voice-connected {
+  color: var(--green);
+  font-size: 11px;
+}
+
+.voice-room {
+  font-weight: bold;
+}
+
+.voice-users {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.voice-user {
+  padding: 4px 7px;
+  border-radius: 4px;
+  background: #2b2d31;
+  color: #dbdee1;
+  font-size: 11px;
+}
+
+.voice-controls {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.voice-control {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: #2b2d31;
+  color: white;
+}
+
+.voice-control:hover {
+  background: #404249;
+}
+
+.voice-control.active {
+  background: var(--green);
+}
+
+.voice-control.danger {
+  background: var(--red);
+}
+
+/* VIDEOS */
+
+.video-grid {
+  position: fixed;
+  inset: 60px 250px 80px 320px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+  padding: 10px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.video-tile {
+  background: #111214;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  min-height: 180px;
+}
+
+.video-tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.video-name {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  background: #000b;
+  font-size: 12px;
+}
+
+/* =========================
+   MODALS
+========================= */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: #0009;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500;
+}
+
+.modal-box {
+  width: 440px;
+  max-width: 92vw;
+  max-height: 85vh;
+  overflow-y: auto;
+  background: #313338;
+  border-radius: 8px;
+  padding: 25px;
+  box-shadow: 0 20px 80px #0009;
+}
+
+.modal-box h2 {
+  margin-top: 0;
+}
+
+.modal-label {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: bold;
+  margin-top: 15px;
+  margin-bottom: 6px;
+}
+
+.modal-input,
+.modal-select {
+  width: 100%;
+  padding: 11px;
+  border-radius: 5px;
+  border: 0;
+  outline: 0;
+  background: #1e1f22;
+  color: white;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.modal-button {
+  padding: 10px 16px;
+  border-radius: 5px;
+  background: #4e5058;
+  color: white;
+}
+
+.modal-button.primary {
+  background: var(--accent);
+}
+
+.modal-button.danger {
+  background: var(--red);
+}
+
+/* FRIENDS */
+
+.friends-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.friends-header {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.friends-header strong {
+  font-size: 16px;
+}
+
+.friend-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.friend-tab {
+  padding: 7px 10px;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.friend-tab:hover,
+.friend-tab.active {
+  background: var(--hover);
+  color: white;
+}
+
+.friend-list {
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.friend-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.friend-info {
+  flex: 1;
+}
+
+.friend-buttons {
+  display: flex;
+  gap: 5px;
+}
+
+/* RESPONSIVE */
+
+@media(max-width:900px) {
+  .member-sidebar {
+    display: none;
+  }
+
+  .channel-sidebar {
+    width: 210px;
+  }
+
+  .server-bar {
+    width: 62px;
+  }
+}
+
+@media(max-width:650px) {
+  .channel-sidebar {
+    display: none;
+  }
+
+  .server-bar {
+    width: 58px;
+  }
+}
+</style>
+</head>
+
+<body>
+
+<!-- =========================
+     LOGIN
+========================= -->
+
+<div id="loginScreen">
+
+  <div class="login-card">
+
+    <div class="login-logo">
+      N
+    </div>
+
+    <h1>Bienvenue sur NovaChat</h1>
+
+    <p>
+      Connecte-toi pour commencer à discuter.
+    </p>
+
+    <input
+      id="usernameInput"
+      class="login-input"
+      maxlength="24"
+      placeholder="Nom d'utilisateur"
+      autocomplete="off"
+    >
+
+    <button
+      id="loginButton"
+      class="login-button"
+    >
+      Entrer dans NovaChat
+    </button>
+
+    <div id="loginStatus"></div>
+
+  </div>
+
+</div>
+
+<!-- =========================
+     APPLICATION
+========================= -->
+
+<div id="app" class="hidden">
+
+  <!-- SERVERS -->
+
+  <aside class="server-bar" id="serverBar">
+
+    <button
+      class="server active"
+      id="homeButton"
+      title="Accueil"
+    >
+      N
+    </button>
+
+    <div id="serverButtons"></div>
+
+    <div class="server-separator"></div>
+
+    <button
+      class="server add"
+      id="createServerButton"
+      title="Créer un serveur"
+    >
+      +
+    </button>
+
+    <button
+      class="server add"
+      id="joinServerButton"
+      title="Rejoindre un serveur"
+    >
+      ↗
+    </button>
+
+  </aside>
+
+  <!-- CHANNELS -->
+
+  <aside class="channel-sidebar">
+
+    <div class="server-header">
+
+      <span id="currentServerName">
+        Nova Lounge
+      </span>
+
+      <button id="serverMenuButton">
+        ▾
+      </button>
+
+    </div>
+
+    <div class="channel-list">
+
+      <div class="category">
+        <span>TEXTUEL</span>
+
+        <button id="addTextChannel">
+          +
+        </button>
+      </div>
+
+      <div id="textChannels"></div>
+
+      <div class="category">
+        <span>VOCAL</span>
+
+        <button id="addVoiceChannel">
+          +
+        </button>
+      </div>
+
+      <div id="voiceChannels"></div>
+
+    </div>
+
+    <!-- USER -->
+
+    <div class="user-box">
+
+      <div class="avatar" id="myAvatar">
+        ?
+        <span class="presence"></span>
+      </div>
+
+      <div class="user-info">
+
+        <strong id="myName">
+          Utilisateur
+        </strong>
+
+        <small>
+          En ligne
+        </small>
+
+      </div>
+
+      <div class="user-actions">
+
+        <button
+          class="small-btn"
+          id="muteQuickButton"
+          title="Micro"
+        >
+          🎤
+        </button>
+
+        <button
+          class="small-btn"
+          id="settingsButton"
+          title="Paramètres"
+        >
+          ⚙
+        </button>
+
+      </div>
+
+    </div>
+
+  </aside>
+
+  <!-- CHAT -->
+
+  <main class="chat">
+
+    <header class="chat-header">
+
+      <div class="hash">
+        #
+      </div>
+
+      <div>
+
+        <div
+          class="chat-name"
+          id="chatName"
+        >
+          général
+        </div>
+
+        <div
+          class="chat-description"
+          id="chatDescription"
+        >
+          Discutez avec les membres.
+        </div>
+
+      </div>
+
+      <div class="header-spacer"></div>
+
+      <button
+        class="header-button"
+        id="friendsButton"
+        title="Amis"
+      >
+        👥
+      </button>
+
+      <button
+        class="header-button"
+        id="memberButton"
+        title="Membres"
+      >
+        ☷
+      </button>
+
+      <button
+        class="header-button"
+        id="searchButton"
+        title="Rechercher"
+      >
+        🔎
+      </button>
+
+    </header>
+
+    <!-- MESSAGE AREA -->
+
+    <div
+      class="messages"
+      id="messages"
+    ></div>
+
+    <!-- COMPOSER -->
+
+    <div class="composer-area">
+
+      <div class="composer">
+
+        <button
+          id="emojiButton"
+          title="Emoji"
+        >
+          🙂
+        </button>
+
+        <textarea
+          id="messageInput"
+          rows="1"
+          placeholder="Écrire un message..."
+        ></textarea>
+
+        <button
+          id="sendButton"
+          title="Envoyer"
+        >
+          ➤
+        </button>
+
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- MEMBERS -->
+
+  <aside class="member-sidebar">
+
+    <div class="member-title">
+      MEMBRES
+    </div>
+
+    <div id="memberList"></div>
+
+  </aside>
+
+</div>
+
+<!-- =========================
+     VOICE PANEL
+========================= -->
+
+<div
+  id="voicePanel"
+  class="voice-panel hidden"
+>
+
+  <div class="voice-top">
+
+    <div>
+
+      <div class="voice-room" id="voiceRoomName">
+        Salon vocal
+      </div>
+
+      <div class="voice-connected">
+        Connecté
+      </div>
+
+    </div>
+
+    <button
+      class="small-btn"
+      id="leaveVoiceButton"
+      title="Quitter"
+    >
+      ☎
+    </button>
+
+  </div>
+
+  <div
+    class="voice-users"
+    id="voiceUsers"
+  ></div>
+
+  <div class="voice-controls">
+
+    <button
+      class="voice-control active"
+      id="muteButton"
+      title="Micro"
+    >
+      🎤
+    </button>
+
+    <button
+      class="voice-control"
+      id="cameraButton"
+      title="Caméra"
+    >
+      📹
+    </button>
+
+    <button
+      class="voice-control"
+      id="screenButton"
+      title="Partager l'écran"
+    >
+      🖥️
+    </button>
+
+  </div>
+
+</div>
+
+<!-- VIDEOS -->
+
+<div
+  id="videoGrid"
+  class="video-grid hidden"
+></div>
+
+<!-- =========================
+     FRIENDS MODAL
+========================= -->
+
+<div
+  id="friendsModal"
+  class="modal hidden"
+>
+
+  <div class="modal-box">
+
+    <h2>👥 Amis</h2>
+
+    <label class="modal-label">
+      Ajouter un ami avec son ID
+    </label>
+
+    <input
+      id="friendIdInput"
+      class="modal-input"
+      placeholder="ID utilisateur"
+    >
+
+    <div
+      id="friendList"
+      class="friend-list"
+    ></div>
+
+    <div class="modal-actions">
+
+      <button
+        class="modal-button"
+        data-close="friendsModal"
+      >
+        Fermer
+      </button>
+
+    </div>
+
+  </div>
+
+</div>
+
+<!-- =========================
+     CREATE SERVER
+========================= -->
+
+<div
+  id="createServerModal"
+  class="modal hidden"
+>
+
+  <div class="modal-box">
+
+    <h2>Créer un serveur</h2>
+
+    <label class="modal-label">
+      Nom du serveur
+    </label>
+
+    <input
+      id="serverNameInput"
+      class="modal-input"
+      maxlength="50"
+      placeholder="Mon serveur"
+    >
+
+    <div class="modal-actions">
+
+      <button
+        class="modal-button"
+        data-close="createServerModal"
+      >
+        Annuler
+      </button>
+
+      <button
+        class="modal-button primary"
+        id="confirmCreateServer"
+      >
+        Créer
+      </button>
+
+    </div>
+
+  </div>
+
+</div>
+
+<!-- =========================
+     JOIN SERVER
+========================= -->
+
+<div
+  id="joinServerModal"
+  class="modal hidden"
+>
+
+  <div class="modal-box">
+
+    <h2>Rejoindre un serveur</h2>
+
+    <p style="color:var(--muted)">
+      Entre le code d'invitation du serveur.
+    </p>
+
+    <label class="modal-label">
+      Code d'invitation
+    </label>
+
+    <input
+      id="inviteInput"
+      class="modal-input"
+      placeholder="XXXX-XXXX"
+    >
+
+    <div class="modal-actions">
+
+      <button
+        class="modal-button"
+        data-close="joinServerModal"
+      >
+        Annuler
+      </button>
+
+      <button
+        class="modal-button primary"
+        id="confirmJoinServer"
+      >
+        Rejoindre
+      </button>
+
+    </div>
+
+  </div>
+
+</div>
+
+<!-- =========================
+     SETTINGS
+========================= -->
+
+<div
+  id="settingsModal"
+  class="modal hidden"
+>
+
+  <div class="modal-box">
+
+    <h2>⚙ Paramètres</h2>
+
+    <label class="modal-label">
+      Nom d'utilisateur
+    </label>
+
+    <input
+      id="settingsUsername"
+      class="modal-input"
+    >
+
+    <label class="modal-label">
+      Micro
+    </label>
+
+    <select
+      id="audioInput"
+      class="modal-select"
+    ></select>
+
+    <label class="modal-label">
+      Sortie audio
+    </label>
+
+    <select
+      id="audioOutput"
+      class="modal-select"
+    ></select>
+
+    <label class="modal-label">
+      Volume
+    </label>
+
+    <input
+      id="volumeSlider"
+      type="range"
+      min="0"
+      max="100"
+      value="100"
+      style="width:100%"
+    >
+
+    <div class="modal-actions">
+
+      <button
+        class="modal-button"
+        data-close="settingsModal"
+      >
+        Fermer
+      </button>
+
+      <button
+        class="modal-button primary"
+        id="saveSettings"
+      >
+        Enregistrer
+      </button>
+
+    </div>
+
+  </div>
+
+</div>
 
 <script>
-const $=s=>document.querySelector(s);
-const state={socket:null,user:null,channel:"general",messages:[],users:[],voice:{room:null,local:null,peers:new Map(),ice:new Map(),muted:false}};
-function send(d){if(state.socket?.readyState===WebSocket.OPEN)state.socket.send(JSON.stringify(d))}
-function connect(){
- const username=$("#username").value.trim();if(!username)return alert("Entre un nom d'utilisateur.");
- const p=location.protocol==="https:"?"wss":"ws";state.socket=new WebSocket(p+"://"+location.host);
- state.socket.onopen=()=>send({type:"login",username});
- state.socket.onmessage=e=>{try{handle(JSON.parse(e.data))}catch(err){console.error(err)}};
-}
-$("#login").onclick=connect;$("#username").onkeydown=e=>{if(e.key==="Enter")connect()};
+/* =========================================================
+   NOVACHAT CLIENT
+========================================================= */
 
-function handle(d){
- if(d.type==="login-success"){state.user=d.user;$("#loginScreen").style.display="none";$("#app").style.display="grid";$("#myName").textContent=d.user.username;$("#myAvatar").textContent=d.user.avatar;requestChannel("general");return}
- if(d.type==="history"){if(d.channel===state.channel){state.messages=d.messages||[];renderMessages()}return}
- if(d.type==="new-message"){if(d.message.channel===state.channel){state.messages.push(d.message);renderMessages(true)}return}
- if(d.type==="presence"){state.users=d.users||[];renderMembers();renderVoiceUsers();return}
- if(d.type==="voice-peers"){d.peers.forEach(p=>createPeer(p.id,true));renderVoiceUsers();return}
- if(d.type==="voice-user-joined"){if(state.voice.room===d.room)renderVoiceUsers();return}
- if(d.type==="voice-user-left"){removePeer(d.userId);renderVoiceUsers();return}
- if(d.type==="webrtc-offer")return offer(d);
- if(d.type==="webrtc-answer")return answer(d);
- if(d.type==="webrtc-ice")return ice(d);
-}
-function requestChannel(c){state.channel=c;document.querySelectorAll("[data-channel]").forEach(b=>b.classList.toggle("active",b.dataset.channel===c));$("#chatName").textContent=c==="general"?"général":c;state.messages=[];renderMessages();send({type:"history",channel:c})}
-document.querySelectorAll("[data-channel]").forEach(b=>b.onclick=()=>requestChannel(b.dataset.channel));
-function renderMessages(scroll=false){$("#messages").innerHTML="";state.messages.forEach(m=>{const row=document.createElement("div");row.className="message";row.innerHTML='<div class="avatar">'+(m.username||"?")[0].toUpperCase()+'</div><div class="body"><div class="head"><span class="name"></span><span class="time"></span></div><div class="text"></div></div>';row.querySelector(".name").textContent=m.username;row.querySelector(".time").textContent=new Date(m.time).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"});row.querySelector(".text").textContent=m.content;$("#messages").append(row)});if(scroll)$("#messages").scrollTop=$("#messages").scrollHeight}
-function renderMembers(){$("#online").innerHTML="";state.users.forEach(u=>{const e=document.createElement("div");e.className="member";e.innerHTML='<div class="avatar">'+u.avatar+'</div><div class="memberName"></div>';e.querySelector(".memberName").textContent=u.username;$("#online").append(e)})}
-function sendMessage(){const c=$("#input").value.trim();if(!c)return;send({type:"send-message",channel:state.channel,content:c});$("#input").value=""}
-$("#send").onclick=sendMessage;$("#input").onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMessage()}};$("#emoji").onclick=()=>{$("#input").value+="🙂";$("#input").focus()};
+const socket = io({
+  autoConnect: false
+});
 
-const rtc={iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun.cloudflare.com:3478"}]};
-async function media(){if(state.voice.local)return state.voice.local;state.voice.local=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});return state.voice.local}
-async function createPeer(id,makeOffer){
- if(state.voice.peers.has(id))return state.voice.peers.get(id);
- const pc=new RTCPeerConnection(rtc);state.voice.peers.set(id,pc);
- const stream=await media();stream.getTracks().forEach(t=>pc.addTrack(t,stream));
- pc.onicecandidate=e=>{if(e.candidate)send({type:"webrtc-ice",targetId:id,candidate:e.candidate})};
- pc.ontrack=e=>{let a=document.getElementById("r-"+id);if(!a){a=document.createElement("audio");a.id="r-"+id;a.autoplay=true;a.playsInline=true;$("#audio").append(a)}a.srcObject=e.streams[0];a.play().catch(()=>{})};
- pc.onconnectionstatechange=()=>{if(["failed","closed"].includes(pc.connectionState))removePeer(id)};
- if(makeOffer){const o=await pc.createOffer();await pc.setLocalDescription(o);send({type:"webrtc-offer",targetId:id,offer:pc.localDescription})}
- return pc
+let currentUser = null;
+let currentServer = null;
+let currentChannel = null;
+
+let localStream = null;
+let localScreenStream = null;
+
+const peerConnections = new Map();
+
+let isMuted = false;
+let cameraEnabled = false;
+let screenSharing = false;
+
+const iceConfig = {
+  iceServers: [
+    {
+      urls: "stun:stun.l.google.com:19302"
+    },
+    {
+      urls: "stun:stun1.l.google.com:19302"
+    }
+  ]
+};
+
+/* =========================================================
+   ELEMENTS
+========================================================= */
+
+const $ = id => document.getElementById(id);
+
+const loginScreen = $("loginScreen");
+const app = $("app");
+
+const usernameInput = $("usernameInput");
+const loginButton = $("loginButton");
+const loginStatus = $("loginStatus");
+
+const messages = $("messages");
+const messageInput = $("messageInput");
+const sendButton = $("sendButton");
+
+const textChannels = $("textChannels");
+const voiceChannels = $("voiceChannels");
+
+const memberList = $("memberList");
+const serverButtons = $("serverButtons");
+
+const currentServerName = $("currentServerName");
+const chatName = $("chatName");
+
+const voicePanel = $("voicePanel");
+const voiceUsers = $("voiceUsers");
+const voiceRoomName = $("voiceRoomName");
+
+const videoGrid = $("videoGrid");
+
+/* =========================================================
+   LOGIN
+========================================================= */
+
+loginButton.addEventListener("click", login);
+
+usernameInput.addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    login();
+  }
+});
+
+async function login() {
+
+  const username = usernameInput.value.trim();
+
+  if (!username) {
+    loginStatus.textContent = "Entre un nom d'utilisateur.";
+    return;
+  }
+
+  loginButton.disabled = true;
+  loginStatus.textContent = "Connexion au serveur...";
+
+  try {
+
+    const response = await fetch("/api/users", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        username
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error("Impossible de créer l'utilisateur.");
+    }
+
+    currentUser = await response.json();
+
+    socket.connect();
+
+  } catch (error) {
+
+    console.error(error);
+
+    loginStatus.textContent =
+      "Impossible de se connecter au serveur.";
+
+    loginButton.disabled = false;
+  }
 }
-async function flush(id,pc){const q=state.voice.ice.get(id)||[];for(const c of q)try{await pc.addIceCandidate(new RTCIceCandidate(c))}catch(e){}state.voice.ice.delete(id)}
-async function offer(d){if(!state.voice.room)return;const pc=await createPeer(d.senderId,false);await pc.setRemoteDescription(new RTCSessionDescription(d.offer));await flush(d.senderId,pc);const a=await pc.createAnswer();await pc.setLocalDescription(a);send({type:"webrtc-answer",targetId:d.senderId,answer:pc.localDescription})}
-async function answer(d){const pc=state.voice.peers.get(d.senderId);if(!pc)return;await pc.setRemoteDescription(new RTCSessionDescription(d.answer));await flush(d.senderId,pc)}
-async function ice(d){if(!d.candidate)return;const pc=state.voice.peers.get(d.senderId);if(!pc||!pc.remoteDescription){if(!state.voice.ice.has(d.senderId))state.voice.ice.set(d.senderId,[]);state.voice.ice.get(d.senderId).push(d.candidate);return}try{await pc.addIceCandidate(new RTCIceCandidate(d.candidate))}catch(e){console.error(e)}}
-function removePeer(id){const pc=state.voice.peers.get(id);if(pc)pc.close();state.voice.peers.delete(id);state.voice.ice.delete(id);document.getElementById("r-"+id)?.remove()}
-function renderVoiceUsers(){if(!state.voice.room)return;$("#vusers").innerHTML="";state.users.filter(u=>u.id===state.user?.id||state.users.length).forEach(u=>{const e=document.createElement("div");e.className="vuser";e.textContent=u.username;$("#vusers").append(e)})}
-async function joinVoice(room){if(state.voice.room)leaveVoice();try{await media()}catch(e){alert("Autorise le microphone dans ton navigateur.");return}state.voice.room=room;$("#voice").style.display="block";$("#roomName").textContent=room==="general"?"Salon général":room;send({type:"voice-join",room});renderVoiceUsers()}
-function leaveVoice(){if(!state.voice.room)return;send({type:"voice-leave"});[...state.voice.peers.keys()].forEach(removePeer);state.voice.local?.getTracks().forEach(t=>t.stop());state.voice.local=null;state.voice.room=null;$("#voice").style.display="none";$("#audio").innerHTML=""}
-document.querySelectorAll(".voice-channel").forEach(b=>b.onclick=()=>joinVoice(b.dataset.room));$("#leave").onclick=leaveVoice;
-$("#mute").onclick=()=>{if(!state.voice.local)return;state.voice.muted=!state.voice.muted;state.voice.local.getAudioTracks().forEach(t=>t.enabled=!state.voice.muted);$("#mute").textContent=state.voice.muted?"🔇":"🎤";$("#mute").classList.toggle("active",!state.voice.muted)};
-$("#camera").onclick=async()=>{if(!state.voice.room)return;try{const s=await navigator.mediaDevices.getUserMedia({video:true});const t=s.getVideoTracks()[0];for(const pc of state.voice.peers.values()){const sender=pc.getSenders().find(x=>x.track?.kind==="video");if(sender)await sender.replaceTrack(t);else pc.addTrack(t,s)}$("#camera").classList.add("active")}catch(e){alert("Impossible d'accéder à la caméra.")}};
-$("#screen").onclick=async()=>{if(!state.voice.room)return;try{const s=await navigator.mediaDevices.getDisplayMedia({video:true});const t=s.getVideoTracks()[0];for(const pc of state.voice.peers.values()){const sender=pc.getSenders().find(x=>x.track?.kind==="video");if(sender)await sender.replaceTrack(t);else pc.addTrack(t,s)}$("#screen").classList.add("active");t.onended=()=>$("#screen").classList.remove("active")}catch(e){console.error(e)}};
-window.addEventListener("beforeunload",()=>send({type:"voice-leave"}));
-</script></body></html>
+
+/* =========================================================
+   SOCKET CONNECTION
+========================================================= */
+
+socket.on("connect", async () => {
+
+  console.log("Socket connecté :", socket.id);
+
+  if (!currentUser) return;
+
+  socket.emit("register", currentUser.id);
+
+  loginScreen.classList.add("hidden");
+  app.classList.remove("hidden");
+
+  $("myName").textContent = currentUser.username;
+  $("myAvatar").firstChild.textContent =
+    currentUser.username.charAt(0).toUpperCase();
+
+  await loadServers();
+});
+
+socket.on("connect_error", error => {
+
+  console.error("Socket error :", error);
+
+  loginStatus.textContent =
+    "Connexion au serveur perdue.";
+
+  loginButton.disabled = false;
+});
+
+socket.on("disconnect", reason => {
+
+  console.log("Socket déconnecté :", reason);
+
+  if (!currentUser) return;
+
+  // On ne remet pas l'écran de login,
+  // car Socket.IO essaiera de se reconnecter.
+});
+
+/* =========================================================
+   SERVERS
+========================================================= */
+
+async function loadServers() {
+
+  const response = await fetch("/api/servers");
+
+  const servers = await response.json();
+
+  serverButtons.innerHTML = "";
+
+  for (const server of servers) {
+
+    if (
+      server.ownerId === "system" ||
+      server.memberCount > 0
+    ) {
+
+      const button = document.createElement("button");
+
+      button.className = "server";
+
+      button.textContent =
+        server.name.charAt(0).toUpperCase();
+
+      button.title = server.name;
+
+      button.addEventListener("click", () => {
+        selectServer(server);
+      });
+
+      serverButtons.appendChild(button);
+    }
+  }
+
+  if (servers.length > 0) {
+
+    let selected =
+      servers.find(s =>
+        s.id === "novalounge"
+      );
+
+    if (!selected) {
+      selected = servers[0];
+    }
+
+    selectServer(selected);
+  }
+}
+
+async function selectServer(server) {
+
+  currentServer = server;
+
+  currentServerName.textContent =
+    server.name;
+
+  socket.emit("joinServer", server.id);
+
+  renderChannels(server);
+
+  await loadMembers(server.id);
+
+  const firstText =
+    server.channels.find(c =>
+      c.type === "text"
+    );
+
+  if (firstText) {
+    selectChannel(firstText);
+  }
+}
+
+function renderChannels(server) {
+
+  textChannels.innerHTML = "";
+  voiceChannels.innerHTML = "";
+
+  for (const channel of server.channels) {
+
+    const button = document.createElement("button");
+
+    button.className = "channel";
+
+    if (channel.type === "text") {
+
+      button.innerHTML = `
+        <span class="channel-icon">#</span>
+        <span>${escapeHtml(channel.name)}</span>
+      `;
+
+      button.addEventListener("click", () => {
+        selectChannel(channel);
+      });
+
+      textChannels.appendChild(button);
+
+    } else {
+
+      button.innerHTML = `
+        <span class="channel-icon">◉</span>
+        <span>${escapeHtml(channel.name)}</span>
+        <span class="voice-count"
+              id="count-${channel.id}">
+          0
+        </span>
+      `;
+
+      button.addEventListener("click", () => {
+        joinVoice(channel);
+      });
+
+      voiceChannels.appendChild(button);
+    }
+  }
+}
+
+/* =========================================================
+   CHANNELS
+========================================================= */
+
+async function selectChannel(channel) {
+
+  currentChannel = channel;
+
+  chatName.textContent =
+    channel.name;
+
+  await loadMessages(channel.id);
+}
+
+async function loadMessages(channelId) {
+
+  messages.innerHTML = "";
+
+  try {
+
+    const response =
+      await fetch(`/api/messages/${channelId}`);
+
+    const data = await response.json();
+
+    for (const message of data) {
+      addMessage(message);
+    }
+
+  } catch (error) {
+
+    console.error(error);
+  }
+
+  scrollMessages();
+}
+
+function addMessage(message) {
+
+  const element =
+    document.createElement("div");
+
+  element.className = "message";
+
+  const initial =
+    (message.username || "?")
+      .charAt(0)
+      .toUpperCase();
+
+  const date =
+    new Date(message.createdAt);
+
+  element.innerHTML = `
+    <div class="message-avatar">
+      ${escapeHtml(initial)}
+    </div>
+
+    <div class="message-content">
+
+      <div>
+        <span class="message-author">
+          ${escapeHtml(message.username)}
+        </span>
+
+        <span class="message-time">
+          ${date.toLocaleString()}
+        </span>
+      </div>
+
+      <div class="message-text">
+        ${escapeHtml(message.content)}
+      </div>
+
+    </div>
+  `;
+
+  messages.appendChild(element);
+}
+
+/* =========================================================
+   SEND MESSAGE
+========================================================= */
+
+sendButton.addEventListener(
+  "click",
+  sendMessage
+);
+
+messageInput.addEventListener(
+  "keydown",
+  e => {
+
+    if (
+      e.key === "Enter" &&
+      !e.shiftKey
+    ) {
+
+      e.preventDefault();
+
+      sendMessage();
+    }
+  }
+);
+
+async function sendMessage() {
+
+  if (!currentUser) return;
+  if (!currentChannel) return;
+
+  const content =
+    messageInput.value.trim();
+
+  if (!content) return;
+
+  messageInput.value = "";
+
+  try {
+
+    await fetch("/api/messages", {
+
+      method: "POST",
+
+      headers: {
+        "Content-Type": "application/json"
+      },
+
+      body: JSON.stringify({
+        channelId: currentChannel.id,
+        userId: currentUser.id,
+        content
+      })
+
+    });
+
+  } catch (error) {
+
+    console.error(error);
+  }
+}
+
+socket.on("newMessage", message => {
+
+  if (
+    currentChannel &&
+    message.channelId === currentChannel.id
+  ) {
+
+    addMessage(message);
+
+    scrollMessages();
+  }
+});
+
+function scrollMessages() {
+
+  messages.scrollTop =
+    messages.scrollHeight;
+}
+
+/* =========================================================
+   MEMBERS
+========================================================= */
+
+async function loadMembers(serverId) {
+
+  const response =
+    await fetch(
+      `/api/servers/${serverId}/members`
+    );
+
+  const members =
+    await response.json();
+
+  memberList.innerHTML = "";
+
+  for (const user of members) {
+
+    addMember(user);
+  }
+}
+
+function addMember(user) {
+
+  const item =
+    document.createElement("div");
+
+  item.className = "member";
+
+  const initial =
+    user.username.charAt(0).toUpperCase();
+
+  item.innerHTML = `
+    <div class="member-avatar">
+      ${escapeHtml(initial)}
+    </div>
+
+    <div>
+      <div class="member-name">
+        ${escapeHtml(user.username)}
+      </div>
+
+      <div class="member-status">
+        ${user.status === "online"
+          ? "En ligne"
+          : "Hors ligne"}
+      </div>
+    </div>
+  `;
+
+  memberList.appendChild(item);
+}
+
+socket.on("serverMemberJoined", data => {
+
+  if (
+    currentServer &&
+    currentServer.id === data.serverId
+  ) {
+
+    loadMembers(data.serverId);
+  }
+});
+
+socket.on("userStatus", data => {
+
+  if (currentServer) {
+    loadMembers(currentServer.id);
+  }
+});
+
+/* =========================================================
+   CREATE SERVER
+========================================================= */
+
+$("createServerButton")
+  .addEventListener("click", () => {
+
+    $("createServerModal")
+      .classList.remove("hidden");
+
+    $("serverNameInput").focus();
+  });
+
+$("confirmCreateServer")
+  .addEventListener("click", async () => {
+
+    const name =
+      $("serverNameInput").value.trim();
+
+    if (!name) return;
+
+    const response =
+      await fetch("/api/servers", {
+
+        method: "POST",
+
+        headers: {
+          "Content-Type": "application/json"
+        },
+
+        body: JSON.stringify({
+          name,
+          ownerId: currentUser.id
+        })
+      });
+
+    if (!response.ok) {
+      alert("Impossible de créer le serveur.");
+      return;
+    }
+
+    const server =
+      await response.json();
+
+    $("createServerModal")
+      .classList.add("hidden");
+
+    $("serverNameInput").value = "";
+
+    await loadServers();
+
+    selectServer(server);
+  });
+
+/* =========================================================
+   JOIN SERVER
+========================================================= */
+
+$("joinServerButton")
+  .addEventListener("click", () => {
+
+    $("joinServerModal")
+      .classList.remove("hidden");
+
+    $("inviteInput").focus();
+  });
+
+$("confirmJoinServer")
+  .addEventListener("click", async () => {
+
+    const inviteCode =
+      $("inviteInput").value.trim();
+
+    if (!inviteCode) return;
+
+    const response =
+      await fetch("/api/servers/join", {
+
+        method: "POST",
+
+        headers: {
+          "Content-Type": "application/json"
+        },
+
+        body: JSON.stringify({
+          inviteCode,
+          userId: currentUser.id
+        })
+      });
+
+    const data =
+      await response.json();
+
+    if (!response.ok) {
+
+      alert(data.error || "Invitation invalide.");
+
+      return;
+    }
+
+    $("joinServerModal")
+      .classList.add("hidden");
+
+    $("inviteInput").value = "";
+
+    await loadServers();
+
+    selectServer(data.server);
+  });
+
+/* =========================================================
+   VOICE
+========================================================= */
+
+async function joinVoice(channel) {
+
+  if (!currentServer) return;
+
+  try {
+
+    await startMicrophone();
+
+    voicePanel.classList.remove("hidden");
+
+    voiceRoomName.textContent =
+      channel.name;
+
+    socket.emit("joinVoice", {
+
+      serverId: currentServer.id,
+
+      roomId: channel.id
+    });
+
+  } catch (error) {
+
+    console.error(error);
+
+    alert(
+      "Impossible d'accéder au microphone. Vérifie les permissions du navigateur."
+    );
+  }
+}
+
+async function startMicrophone() {
+
+  if (localStream) return;
+
+  localStream =
+    await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: false
+    });
+}
+
+$("leaveVoiceButton")
+  .addEventListener("click", leaveVoice);
+
+function leaveVoice() {
+
+  socket.emit("leaveVoice");
+
+  if (localStream) {
+
+    localStream
+      .getTracks()
+      .forEach(track => track.stop());
+
+    localStream = null;
+  }
+
+  if (localScreenStream) {
+
+    localScreenStream
+      .getTracks()
+      .forEach(track => track.stop());
+
+    localScreenStream = null;
+  }
+
+  for (const pc of peerConnections.values()) {
+    pc.close();
+  }
+
+  peerConnections.clear();
+
+  voicePanel.classList.add("hidden");
+
+  videoGrid.classList.add("hidden");
+
+  videoGrid.innerHTML = "";
+}
+
+/* =========================================================
+   VOICE USERS
+========================================================= */
+
+socket.on("voiceUsers", async data => {
+
+  voiceUsers.innerHTML = "";
+
+  for (const userId of data.users) {
+
+    addVoiceUser(userId);
+
+    await createOfferForUser(userId);
+  }
+});
+
+socket.on("voiceUserJoined", async data => {
+
+  addVoiceUser(data.userId);
+
+  await createOfferForUser(data.userId);
+});
+
+socket.on("voiceUserLeft", data => {
+
+  removeVoiceUser(data.userId);
+
+  closePeer(data.userId);
+});
+
+function addVoiceUser(userId) {
+
+  if (
+    document.querySelector(
+      `[data-voice-user="${userId}"]`
+    )
+  ) {
+    return;
+  }
+
+  const element =
+    document.createElement("div");
+
+  element.className = "voice-user";
+
+  element.dataset.voiceUser = userId;
+
+  element.textContent =
+    "Utilisateur";
+
+  voiceUsers.appendChild(element);
+}
+
+function removeVoiceUser(userId) {
+
+  const element =
+    document.querySelector(
+      `[data-voice-user="${userId}"]`
+    );
+
+  if (element) {
+    element.remove();
+  }
+}
+
+/* =========================================================
+   WEBRTC
+========================================================= */
+
+async function createPeer(userId) {
+
+  if (peerConnections.has(userId)) {
+    return peerConnections.get(userId);
+  }
+
+  const pc =
+    new RTCPeerConnection(iceConfig);
+
+  peerConnections.set(userId, pc);
+
+  if (localStream) {
+
+    for (
+      const track
+      of localStream.getTracks()
+    ) {
+
+      pc.addTrack(
+        track,
+        localStream
+      );
+    }
+  }
+
+  pc.onicecandidate = event => {
+
+    if (!event.candidate) return;
+
+    socket.emit(
+      "webrtcIceCandidate",
+      {
+        target: userId,
+        candidate: event.candidate
+      }
+    );
+  };
+
+  pc.ontrack = event => {
+
+    const stream =
+      event.streams[0];
+
+    if (stream) {
+      addRemoteStream(
+        userId,
+        stream
+      );
+    }
+  };
+
+  pc.onconnectionstatechange = () => {
+
+    if (
+      pc.connectionState === "failed" ||
+      pc.connectionState === "closed" ||
+      pc.connectionState === "disconnected"
+    ) {
+
+      closePeer(userId);
+    }
+  };
+
+  return pc;
+}
+
+async function createOfferForUser(userId) {
+
+  try {
+
+    const pc =
+      await createPeer(userId);
+
+    const offer =
+      await pc.createOffer();
+
+    await pc.setLocalDescription(offer);
+
+    socket.emit(
+      "webrtcOffer",
+      {
+        target: userId,
+        offer
+      }
+    );
+
+  } catch (error) {
+
+    console.error(
+      "Offer WebRTC:",
+      error
+    );
+  }
+}
+
+socket.on(
+  "webrtcOffer",
+  async data => {
+
+    try {
+
+      const pc =
+        await createPeer(data.from);
+
+      await pc.setRemoteDescription(
+        new RTCSessionDescription(
+          data.offer
+        )
+      );
+
+      const answer =
+        await pc.createAnswer();
+
+      await pc.setLocalDescription(
+        answer
+      );
+
+      socket.emit(
+        "webrtcAnswer",
+        {
+          target: data.from,
+          answer
+        }
+      );
+
+    } catch (error) {
+
+      console.error(
+        "Offer reçue:",
+        error
+      );
+    }
+  }
+);
+
+socket.on(
+  "webrtcAnswer",
+  async data => {
+
+    try {
+
+      const pc =
+        peerConnections.get(
+          data.from
+        );
+
+      if (!pc) return;
+
+      await pc.setRemoteDescription(
+        new RTCSessionDescription(
+          data.answer
+        )
+      );
+
+    } catch (error) {
+
+      console.error(
+        "Answer:",
+        error
+      );
+    }
+  }
+);
+
+socket.on(
+  "webrtcIceCandidate",
+  async data => {
+
+    try {
+
+      const pc =
+        await createPeer(data.from);
+
+      await pc.addIceCandidate(
+        new RTCIceCandidate(
+          data.candidate
+        )
+      );
+
+    } catch (error) {
+
+      console.error(
+        "ICE:",
+        error
+      );
+    }
+  }
+);
+
+/* =========================================================
+   CAMERA
+========================================================= */
+
+$("cameraButton")
+  .addEventListener(
+    "click",
+    toggleCamera
+  );
+
+async function toggleCamera() {
+
+  if (!localStream) {
+
+    await startMicrophone();
+  }
+
+  if (!cameraEnabled) {
+
+    try {
+
+      const cameraStream =
+        await navigator.mediaDevices
+          .getUserMedia({
+            audio: true,
+            video: true
+          });
+
+      const videoTrack =
+        cameraStream.getVideoTracks()[0];
+
+      localStream.addTrack(
+        videoTrack
+      );
+
+      cameraEnabled = true;
+
+      $("cameraButton")
+        .classList.add("active");
+
+      updatePeerTracks();
+
+    } catch (error) {
+
+      console.error(error);
+
+      alert(
+        "Impossible d'accéder à la caméra."
+      );
+    }
+
+  } else {
+
+    const tracks =
+      localStream.getVideoTracks();
+
+    tracks.forEach(track => {
+
+      track.stop();
+
+      localStream.removeTrack(
+        track
+      );
+    });
+
+    cameraEnabled = false;
+
+    $("cameraButton")
+      .classList.remove("active");
+
+    updatePeerTracks();
+  }
+}
+
+/* =========================================================
+   SCREEN SHARE
+========================================================= */
+
+$("screenButton")
+  .addEventListener(
+    "click",
+    toggleScreen
+  );
+
+async function toggleScreen() {
+
+  if (!screenSharing) {
+
+    try {
+
+      localScreenStream =
+        await navigator.mediaDevices
+          .getDisplayMedia({
+            video: true,
+            audio: true
+          });
+
+      const track =
+        localScreenStream
+          .getVideoTracks()[0];
+
+      track.onended = () => {
+
+        stopScreenShare();
+      };
+
+      for (
+        const pc
+        of peerConnections.values()
+      ) {
+
+        const sender =
+          pc.getSenders()
+            .find(
+              s =>
+                s.track &&
+                s.track.kind === "video"
+            );
+
+        if (sender) {
+
+          await sender.replaceTrack(
+            track
+          );
+        } else {
+
+          pc.addTrack(
+            track,
+            localScreenStream
+          );
+        }
+      }
+
+      screenSharing = true;
+
+      $("screenButton")
+        .classList.add("active");
+
+    } catch (error) {
+
+      console.error(error);
+    }
+
+  } else {
+
+    stopScreenShare();
+  }
+}
+
+function stopScreenShare() {
+
+  if (localScreenStream) {
+
+    localScreenStream
+      .getTracks()
+      .forEach(track =>
+        track.stop()
+      );
+
+    localScreenStream = null;
+  }
+
+  screenSharing = false;
+
+  $("screenButton")
+    .classList.remove("active");
+
+  updatePeerTracks();
+}
+
+/* =========================================================
+   MICROPHONE
+========================================================= */
+
+$("muteButton")
+  .addEventListener(
+    "click",
+    toggleMute
+  );
+
+$("muteQuickButton")
+  .addEventListener(
+    "click",
+    toggleMute
+  );
+
+function toggleMute() {
+
+  if (!localStream) return;
+
+  const audioTracks =
+    localStream.getAudioTracks();
+
+  if (!audioTracks.length) return;
+
+  isMuted = !isMuted;
+
+  for (const track of audioTracks) {
+    track.enabled = !isMuted;
+  }
+
+  $("muteButton").classList.toggle(
+    "active",
+    !isMuted
+  );
+
+  $("muteQuickButton").textContent =
+    isMuted ? "🔇" : "🎤";
+}
+
+/* =========================================================
+   PEER TRACK UPDATE
+========================================================= */
+
+function updatePeerTracks() {
+
+  for (
+    const [userId, pc]
+    of peerConnections
+  ) {
+
+    const senders =
+      pc.getSenders();
+
+    const audioTrack =
+      localStream?.getAudioTracks()[0];
+
+    const videoTrack =
+      localStream?.getVideoTracks()[0];
+
+    const audioSender =
+      senders.find(
+        s =>
+          s.track &&
+          s.track.kind === "audio"
+      );
+
+    const videoSender =
+      senders.find(
+        s =>
+          s.track &&
+          s.track.kind === "video"
+      );
+
+    if (
+      audioSender &&
+      audioTrack
+    ) {
+
+      audioSender.replaceTrack(
+        audioTrack
+      );
+    }
+
+    if (
+      videoSender &&
+      videoTrack
+    ) {
+
+      videoSender.replaceTrack(
+        videoTrack
+      );
+    }
+  }
+}
+
+/* =========================================================
+   VIDEO
+========================================================= */
+
+function addRemoteStream(
+  userId,
+  stream
+) {
+
+  let tile =
+    document.querySelector(
+      `[data-video-user="${userId}"]`
+    );
+
+  if (!tile) {
+
+    tile =
+      document.createElement("div");
+
+    tile.className =
+      "video-tile";
+
+    tile.dataset.videoUser =
+      userId;
+
+    const video =
+      document.createElement("video");
+
+    video.autoplay = true;
+    video.playsInline = true;
+
+    const name =
+      document.createElement("div");
+
+    name.className =
+      "video-name";
+
+    name.textContent =
+      "Utilisateur";
+
+    tile.appendChild(video);
+    tile.appendChild(name);
+
+    videoGrid.appendChild(tile);
+  }
+
+  const video =
+    tile.querySelector("video");
+
+  video.srcObject = stream;
+
+  videoGrid.classList.remove(
+    "hidden"
+  );
+}
+
+function closePeer(userId) {
+
+  const pc =
+    peerConnections.get(userId);
+
+  if (pc) {
+    pc.close();
+  }
+
+  peerConnections.delete(userId);
+
+  const tile =
+    document.querySelector(
+      `[data-video-user="${userId}"]`
+    );
+
+  if (tile) {
+    tile.remove();
+  }
+
+  if (
+    videoGrid.children.length === 0
+  ) {
+
+    videoGrid.classList.add(
+      "hidden"
+    );
+  }
+}
+
+/* =========================================================
+   EMOJI
+========================================================= */
+
+$("emojiButton")
+  .addEventListener(
+    "click",
+    () => {
+
+      const emojis =
+        [
+          "😀",
+          "😂",
+          "😍",
+          "😎",
+          "🔥",
+          "❤️",
+          "👍",
+          "👎",
+          "🎉",
+          "🚀",
+          "💀",
+          "😭"
+        ];
+
+      const emoji =
+        emojis[
+          Math.floor(
+            Math.random() *
+            emojis.length
+          )
+        ];
+
+      messageInput.value += emoji;
+
+      messageInput.focus();
+    }
+  );
+
+/* =========================================================
+   SETTINGS
+========================================================= */
+
+$("settingsButton")
+  .addEventListener(
+    "click",
+    openSettings
+  );
+
+async function openSettings() {
+
+  $("settingsUsername").value =
+    currentUser.username;
+
+  $("settingsModal")
+    .classList.remove("hidden");
+
+  await loadAudioDevices();
+}
+
+async function loadAudioDevices() {
+
+  try {
+
+    await navigator.mediaDevices
+      .getUserMedia({
+        audio: true
+      });
+
+    const devices =
+      await navigator.mediaDevices
+        .enumerateDevices();
+
+    const inputs =
+      devices.filter(
+        d => d.kind === "audioinput"
+      );
+
+    const outputs =
+      devices.filter(
+        d => d.kind === "audiooutput"
+      );
+
+    $("audioInput").innerHTML = "";
+
+    $("audioOutput").innerHTML = "";
+
+    inputs.forEach(device => {
+
+      const option =
+        document.createElement("option");
+
+      option.value =
+        device.deviceId;
+
+      option.textContent =
+        device.label ||
+        "Microphone";
+
+      $("audioInput")
+        .appendChild(option);
+    });
+
+    outputs.forEach(device => {
+
+      const option =
+        document.createElement("option");
+
+      option.value =
+        device.deviceId;
+
+      option.textContent =
+        device.label ||
+        "Haut-parleur";
+
+      $("audioOutput")
+        .appendChild(option);
+    });
+
+  } catch (error) {
+
+    console.error(
+      "Audio devices:",
+      error
+    );
+  }
+}
+
+$("saveSettings")
+  .addEventListener(
+    "click",
+    async () => {
+
+      const username =
+        $("settingsUsername")
+          .value.trim();
+
+      if (username) {
+
+        currentUser.username =
+          username;
+
+        $("myName").textContent =
+          username;
+
+        $("myAvatar")
+          .firstChild.textContent =
+            username
+              .charAt(0)
+              .toUpperCase();
+      }
+
+      const volume =
+        Number(
+          $("volumeSlider").value
+        ) / 100;
+
+      document
+        .querySelectorAll(
+          "audio, video"
+        )
+        .forEach(element => {
+          element.volume = volume;
+        });
+
+      const output =
+        $("audioOutput").value;
+
+      if (
+        output &&
+        typeof HTMLMediaElement
+          .prototype.setSinkId ===
+          "function"
+      ) {
+
+        document
+          .querySelectorAll(
+            "audio, video"
+          )
+          .forEach(element => {
+
+            element.setSinkId(
+              output
+            ).catch(() => {});
+          });
+      }
+
+      $("settingsModal")
+        .classList.add("hidden");
+    }
+  );
+
+/* =========================================================
+   FRIENDS
+========================================================= */
+
+$("friendsButton")
+  .addEventListener(
+    "click",
+    () => {
+
+      $("friendsModal")
+        .classList.remove("hidden");
+    }
+  );
+
+/* =========================================================
+   CLOSE MODALS
+========================================================= */
+
+document
+  .querySelectorAll(
+    "[data-close]"
+  )
+  .forEach(button => {
+
+    button.addEventListener(
+      "click",
+      () => {
+
+        const id =
+          button.dataset.close;
+
+        $(id)
+          .classList.add("hidden");
+      }
+    );
+  });
+
+document
+  .querySelectorAll(".modal")
+  .forEach(modal => {
+
+    modal.addEventListener(
+      "click",
+      e => {
+
+        if (
+          e.target === modal
+        ) {
+
+          modal.classList.add(
+            "hidden"
+          );
+        }
+      }
+    );
+  });
+
+/* =========================================================
+   HOME
+========================================================= */
+
+$("homeButton")
+  .addEventListener(
+    "click",
+    async () => {
+
+      await loadServers();
+    }
+  );
+
+/* =========================================================
+   ESCAPE HTML
+========================================================= */
+
+function escapeHtml(value) {
+
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+/* =========================================================
+   RECONNECTION
+========================================================= */
+
+socket.io.on(
+  "reconnect_attempt",
+  () => {
+
+    console.log(
+      "Tentative de reconnexion..."
+    );
+  }
+);
+
+socket.io.on(
+  "reconnect",
+  () => {
+
+    console.log(
+      "Reconnecté au serveur."
+    );
+
+    if (currentUser) {
+
+      socket.emit(
+        "register",
+        currentUser.id
+      );
+    }
+  }
+);
+</script>
+
+</body>
+</html>
