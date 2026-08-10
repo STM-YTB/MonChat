@@ -1,59 +1,169 @@
+```js
 const express = require("express");
 const http = require("http");
-const path = require("path");
 const { Server } = require("socket.io");
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "*"
-  },
-  transports: ["websocket", "polling"]
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
 });
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
-/*
-====================================================
-                    DONNÉES
-====================================================
-*/
+// ============================================================
+// DATABASE
+// ============================================================
 
-// Utilisateurs actuellement connectés
-const users = new Map();
+const DATA_FILE = path.join(__dirname, "data.json");
 
-// Relations d'amitié
-// userId -> Set(userId)
-const friends = new Map();
+const defaultDatabase = {
+  users: [],
+  servers: [],
+  messages: []
+};
 
-// Demandes d'amitié
-// userId -> Set(userId)
-const friendRequests = new Map();
+function loadDatabase() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) {
+      fs.writeFileSync(
+        DATA_FILE,
+        JSON.stringify(defaultDatabase, null, 2)
+      );
 
-// Messages privés en mémoire
-// conversationId -> Array(messages)
-const privateMessages = new Map();
+      return JSON.parse(JSON.stringify(defaultDatabase));
+    }
 
-// Salons vocaux
-// roomId -> Set(socketId)
-const voiceRooms = new Map();
+    const data = JSON.parse(
+      fs.readFileSync(DATA_FILE, "utf8")
+    );
 
+    return {
+      users: Array.isArray(data.users) ? data.users : [],
+      servers: Array.isArray(data.servers) ? data.servers : [],
+      messages: Array.isArray(data.messages) ? data.messages : []
+    };
+  } catch (error) {
+    console.error("Erreur lecture database :", error);
 
-/*
-====================================================
-                  UTILITAIRES
-====================================================
-*/
+    return JSON.parse(
+      JSON.stringify(defaultDatabase)
+    );
+  }
+}
 
-function cleanName(name) {
-  return String(name || "Utilisateur")
+let db = loadDatabase();
+
+function saveDatabase() {
+  try {
+    const tempFile = DATA_FILE + ".tmp";
+
+    fs.writeFileSync(
+      tempFile,
+      JSON.stringify(db, null, 2)
+    );
+
+    fs.renameSync(tempFile, DATA_FILE);
+  } catch (error) {
+    console.error("Erreur sauvegarde database :", error);
+  }
+}
+
+// ============================================================
+// UTILITAIRES
+// ============================================================
+
+function id() {
+  return crypto.randomUUID();
+}
+
+function randomCode(length = 8) {
+  const chars =
+    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+
+  let result = "";
+
+  for (let i = 0; i < length; i++) {
+    result += chars[
+      crypto.randomInt(0, chars.length)
+    ];
+  }
+
+  return result;
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+
+  const hash = crypto
+    .pbkdf2Sync(
+      password,
+      salt,
+      120000,
+      64,
+      "sha512"
+    )
+    .toString("hex");
+
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, storedPassword) {
+  try {
+    const parts = storedPassword.split(":");
+
+    if (parts.length !== 2) {
+      return false;
+    }
+
+    const salt = parts[0];
+    const originalHash = parts[1];
+
+    const hash = crypto
+      .pbkdf2Sync(
+        password,
+        salt,
+        120000,
+        64,
+        "sha512"
+      )
+      .toString("hex");
+
+    return crypto.timingSafeEqual(
+      Buffer.from(hash, "hex"),
+      Buffer.from(originalHash, "hex")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function normalizeUsername(username) {
+  return String(username || "")
     .trim()
-    .slice(0, 24) || "Utilisateur";
+    .toLowerCase();
+}
+
+function validUsername(username) {
+  return /^[a-zA-Z0-9_.-]{3,24}$/.test(username);
+}
+
+function validDisplayName(name) {
+  return (
+    typeof name === "string" &&
+    name.trim().length >= 1 &&
+    name.trim().length <= 32
+  );
 }
 
 function publicUser(user) {
@@ -62,691 +172,1551 @@ function publicUser(user) {
   return {
     id: user.id,
     username: user.username,
-    avatar: user.username.charAt(0).toUpperCase()
+    displayName: user.displayName,
+    avatar: user.avatar || null,
+    createdAt: user.createdAt
   };
 }
 
-function getOnlineUsers() {
-  return [...users.values()].map(publicUser);
+function findUserById(userId) {
+  return db.users.find(
+    user => user.id === userId
+  );
 }
 
-function ensureSet(map, key) {
-  if (!map.has(key)) {
-    map.set(key, new Set());
+function findUserByUsername(username) {
+  const normalized = normalizeUsername(username);
+
+  return db.users.find(
+    user => user.username === normalized
+  );
+}
+
+// ============================================================
+// SESSIONS
+// ============================================================
+
+const sessions = new Map();
+
+function createSession(userId) {
+  const token = crypto
+    .randomBytes(48)
+    .toString("hex");
+
+  sessions.set(token, {
+    userId,
+    createdAt: Date.now()
+  });
+
+  return token;
+}
+
+function getUserFromToken(token) {
+  if (!token) return null;
+
+  const session = sessions.get(token);
+
+  if (!session) {
+    return null;
   }
 
-  return map.get(key);
+  return findUserById(session.userId);
 }
 
-function conversationId(a, b) {
-  return [a, b].sort().join(":");
-}
+function auth(req, res, next) {
+  const header = req.headers.authorization || "";
 
-function getFriends(userId) {
-  const list = friends.get(userId);
+  const token = header.startsWith("Bearer ")
+    ? header.substring(7)
+    : null;
 
-  if (!list) {
-    return [];
+  const user = getUserFromToken(token);
+
+  if (!user) {
+    return res.status(401).json({
+      error: "Non connecté"
+    });
   }
 
-  return [...list]
-    .map(id => users.get(id))
-    .filter(Boolean)
-    .map(publicUser);
+  req.user = user;
+  req.token = token;
+
+  next();
 }
 
-function emitFriends(userId) {
-  const user = users.get(userId);
+// ============================================================
+// AUTHENTIFICATION
+// ============================================================
 
-  if (!user) return;
+app.post("/api/auth/register", (req, res) => {
+  const {
+    email,
+    password,
+    username,
+    displayName
+  } = req.body;
 
-  io.to(user.socketRoom).emit("friends-list", {
-    friends: getFriends(userId)
-  });
-}
-
-function emitOnlineUsers() {
-  io.emit("online-users", getOnlineUsers());
-}
-
-
-/*
-====================================================
-                     CONNEXION
-====================================================
-*/
-
-io.on("connection", socket => {
-
-  console.log("Nouvelle connexion :", socket.id);
-
-
-  /*
-  ==================================================
-                    CONNEXION UTILISATEUR
-  ==================================================
-  */
-
-  socket.on("login", username => {
-
-    const name = cleanName(username);
-
-    const user = {
-      id: socket.id,
-      username: name,
-      socketRoom: socket.id
-    };
-
-    users.set(socket.id, user);
-
-    socket.join(socket.id);
-
-    ensureSet(friends, socket.id);
-    ensureSet(friendRequests, socket.id);
-
-    socket.emit("login-ok", {
-      id: socket.id,
-      username: name,
-      friends: getFriends(socket.id)
+  if (
+    typeof email !== "string" ||
+    !email.includes("@")
+  ) {
+    return res.status(400).json({
+      error: "Adresse email invalide."
     });
-
-    emitOnlineUsers();
-
-    console.log(`${name} est connecté`);
-  });
-
-
-  /*
-  ==================================================
-                    LISTE DES AMIS
-  ==================================================
-  */
-
-  socket.on("get-friends", () => {
-
-    if (!users.has(socket.id)) return;
-
-    socket.emit("friends-list", {
-      friends: getFriends(socket.id)
-    });
-  });
-
-
-  /*
-  ==================================================
-                 AJOUTER UN AMI
-  ==================================================
-  */
-
-  socket.on("send-friend-request", data => {
-
-    const targetId = String(data?.userId || "");
-
-    const sender = users.get(socket.id);
-    const target = users.get(targetId);
-
-    if (!sender || !target) {
-      socket.emit("friend-error", {
-        message: "Utilisateur introuvable."
-      });
-
-      return;
-    }
-
-    if (targetId === socket.id) {
-      socket.emit("friend-error", {
-        message: "Tu ne peux pas t'ajouter toi-même."
-      });
-
-      return;
-    }
-
-    const senderFriends = ensureSet(friends, socket.id);
-
-    if (senderFriends.has(targetId)) {
-      socket.emit("friend-error", {
-        message: "Vous êtes déjà amis."
-      });
-
-      return;
-    }
-
-    const requests = ensureSet(friendRequests, targetId);
-
-    if (requests.has(socket.id)) {
-      socket.emit("friend-error", {
-        message: "Demande déjà envoyée."
-      });
-
-      return;
-    }
-
-    requests.add(socket.id);
-
-    socket.emit("friend-request-sent", {
-      user: publicUser(target)
-    });
-
-    io.to(target.socketRoom).emit("friend-request", {
-      from: publicUser(sender)
-    });
-  });
-
-
-  /*
-  ==================================================
-                ACCEPTER UNE DEMANDE
-  ==================================================
-  */
-
-  socket.on("accept-friend-request", data => {
-
-    const requesterId = String(data?.userId || "");
-
-    const requester = users.get(requesterId);
-    const currentUser = users.get(socket.id);
-
-    if (!currentUser || !requester) {
-      return;
-    }
-
-    const requests = ensureSet(friendRequests, socket.id);
-
-    if (!requests.has(requesterId)) {
-      return;
-    }
-
-    requests.delete(requesterId);
-
-    ensureSet(friends, socket.id).add(requesterId);
-    ensureSet(friends, requesterId).add(socket.id);
-
-    socket.emit("friend-added", {
-      user: publicUser(requester)
-    });
-
-    io.to(requester.socketRoom).emit("friend-added", {
-      user: publicUser(currentUser)
-    });
-
-    emitFriends(socket.id);
-    emitFriends(requesterId);
-  });
-
-
-  /*
-  ==================================================
-                REFUSER UNE DEMANDE
-  ==================================================
-  */
-
-  socket.on("decline-friend-request", data => {
-
-    const requesterId = String(data?.userId || "");
-
-    const requests = ensureSet(friendRequests, socket.id);
-
-    requests.delete(requesterId);
-
-    socket.emit("friend-request-declined", {
-      userId: requesterId
-    });
-  });
-
-
-  /*
-  ==================================================
-                     SUPPRIMER AMI
-  ==================================================
-  */
-
-  socket.on("remove-friend", data => {
-
-    const friendId = String(data?.userId || "");
-
-    const myFriends = ensureSet(friends, socket.id);
-
-    myFriends.delete(friendId);
-
-    const theirFriends = ensureSet(friends, friendId);
-
-    theirFriends.delete(socket.id);
-
-    emitFriends(socket.id);
-
-    if (users.has(friendId)) {
-      emitFriends(friendId);
-
-      io.to(users.get(friendId).socketRoom).emit(
-        "friend-removed",
-        {
-          userId: socket.id
-        }
-      );
-    }
-  });
-
-
-  /*
-  ==================================================
-                    MESSAGES PRIVÉS
-  ==================================================
-  */
-
-  socket.on("get-private-messages", data => {
-
-    const otherUserId = String(data?.userId || "");
-
-    if (!users.has(socket.id)) return;
-
-    const id = conversationId(socket.id, otherUserId);
-
-    socket.emit("private-message-history", {
-      userId: otherUserId,
-      messages: privateMessages.get(id) || []
-    });
-  });
-
-
-  socket.on("send-private-message", data => {
-
-    const targetId = String(data?.to || "");
-    const content = String(data?.content || "")
-      .trim()
-      .slice(0, 4000);
-
-    const sender = users.get(socket.id);
-    const target = users.get(targetId);
-
-    if (!sender || !target || !content) {
-      return;
-    }
-
-    const id = conversationId(socket.id, targetId);
-
-    const message = {
-      id:
-        Date.now() +
-        "-" +
-        Math.random()
-          .toString(16)
-          .slice(2),
-
-      from: socket.id,
-
-      fromUsername: sender.username,
-
-      to: targetId,
-
-      content,
-
-      createdAt: Date.now()
-    };
-
-    if (!privateMessages.has(id)) {
-      privateMessages.set(id, []);
-    }
-
-    privateMessages.get(id).push(message);
-
-    /*
-    Limite l'historique à 500 messages
-    */
-
-    if (privateMessages.get(id).length > 500) {
-      privateMessages.get(id).shift();
-    }
-
-    socket.emit("new-private-message", message);
-
-    io.to(target.socketRoom).emit(
-      "new-private-message",
-      message
-    );
-  });
-
-
-  /*
-  ==================================================
-                       VOCAL
-  ==================================================
-  */
-
-  socket.on("join-voice", roomId => {
-
-    if (!users.has(socket.id)) {
-      return;
-    }
-
-    roomId = String(roomId || "general");
-
-    /*
-    Si déjà dans un vocal,
-    on le retire d'abord.
-    */
-
-    leaveVoice(socket);
-
-    if (!voiceRooms.has(roomId)) {
-      voiceRooms.set(roomId, new Set());
-    }
-
-    const room = voiceRooms.get(roomId);
-
-    /*
-    Liste des utilisateurs déjà présents
-    AVANT d'ajouter le nouvel utilisateur.
-    */
-
-    const existingUsers = [...room]
-      .map(id => users.get(id))
-      .filter(Boolean)
-      .map(publicUser);
-
-    socket.join("voice:" + roomId);
-
-    room.add(socket.id);
-
-    socket.data.voiceRoom = roomId;
-
-    /*
-    On donne au nouvel utilisateur
-    la liste des personnes déjà présentes.
-    */
-
-    socket.emit("voice-existing-users", existingUsers);
-
-    /*
-    Les autres utilisateurs apprennent
-    qu'une nouvelle personne vient d'arriver.
-    */
-
-    socket.to("voice:" + roomId).emit(
-      "user-joined-voice",
-      publicUser(users.get(socket.id))
-    );
-
-    emitVoiceUsers(roomId);
-  });
-
-
-  /*
-  ==================================================
-                    QUITTER VOCAL
-  ==================================================
-  */
-
-  socket.on("leave-voice", () => {
-    leaveVoice(socket);
-  });
-
-
-  /*
-  ==================================================
-                UTILISATEURS DU VOCAL
-  ==================================================
-  */
-
-  function emitVoiceUsers(roomId) {
-
-    const room = voiceRooms.get(roomId);
-
-    if (!room) {
-      return;
-    }
-
-    const members = [...room]
-      .map(id => users.get(id))
-      .filter(Boolean)
-      .map(publicUser);
-
-    io.to("voice:" + roomId).emit(
-      "voice-users",
-      members
-    );
   }
 
-
-  /*
-  ==================================================
-                    SIGNAL WEBRTC
-  ==================================================
-  */
-
-  socket.on("webrtc-offer", data => {
-
-    const target = String(data?.to || "");
-
-    if (!users.has(target)) {
-      return;
-    }
-
-    io.to(target).emit("webrtc-offer", {
-      from: socket.id,
-      offer: data.offer
+  if (
+    typeof password !== "string" ||
+    password.length < 6
+  ) {
+    return res.status(400).json({
+      error:
+        "Le mot de passe doit contenir au moins 6 caractères."
     });
-  });
+  }
 
+  const normalizedEmail =
+    email.trim().toLowerCase();
 
-  socket.on("webrtc-answer", data => {
+  const normalizedUsername =
+    normalizeUsername(username);
 
-    const target = String(data?.to || "");
-
-    if (!users.has(target)) {
-      return;
-    }
-
-    io.to(target).emit("webrtc-answer", {
-      from: socket.id,
-      answer: data.answer
+  if (!validUsername(normalizedUsername)) {
+    return res.status(400).json({
+      error:
+        "Nom d'utilisateur invalide. Utilise 3 à 24 caractères : lettres, chiffres, _, - ou ."
     });
-  });
+  }
 
-
-  socket.on("webrtc-ice-candidate", data => {
-
-    const target = String(data?.to || "");
-
-    if (!users.has(target)) {
-      return;
-    }
-
-    io.to(target).emit(
-      "webrtc-ice-candidate",
-      {
-        from: socket.id,
-        candidate: data.candidate
-      }
-    );
-  });
-
-
-  /*
-  ==================================================
-                   CHAT SERVEUR
-  ==================================================
-  */
-
-  socket.on("send-message", data => {
-
-    const user = users.get(socket.id);
-
-    if (!user) {
-      return;
-    }
-
-    const channel = String(
-      data?.channel || "general"
-    ).slice(0, 50);
-
-    const content = String(
-      data?.content || ""
+  if (
+    db.users.some(
+      user => user.email === normalizedEmail
     )
-      .trim()
-      .slice(0, 4000);
+  ) {
+    return res.status(409).json({
+      error: "Cette adresse email est déjà utilisée."
+    });
+  }
 
-    if (!content) {
-      return;
-    }
+  if (
+    db.users.some(
+      user => user.username === normalizedUsername
+    )
+  ) {
+    return res.status(409).json({
+      error: "Ce nom d'utilisateur est déjà utilisé."
+    });
+  }
 
-    const message = {
-      id:
-        Date.now() +
-        "-" +
-        Math.random()
-          .toString(16)
-          .slice(2),
+  const user = {
+    id: id(),
+    email: normalizedEmail,
+    password: hashPassword(password),
 
-      userId: socket.id,
+    username: normalizedUsername,
 
-      username: user.username,
+    displayName:
+      validDisplayName(displayName)
+        ? displayName.trim()
+        : normalizedUsername,
 
-      channel,
+    avatar: null,
 
-      content,
+    createdAt: Date.now(),
 
-      createdAt: Date.now()
-    };
+    lastUsernameChange: Date.now(),
 
-    /*
-    Pour l'instant le message serveur
-    est diffusé à tous les utilisateurs connectés.
-    */
+    friends: [],
 
-    io.emit("new-message", message);
-  });
+    incomingFriendRequests: [],
+    outgoingFriendRequests: [],
 
+    servers: []
+  };
 
-  /*
-  ==================================================
-                    DÉCONNEXION
-  ==================================================
-  */
+  db.users.push(user);
 
-  socket.on("disconnect", () => {
+  saveDatabase();
 
-    console.log(
-      "Utilisateur déconnecté :",
-      socket.id
-    );
+  const token = createSession(user.id);
 
-    leaveVoice(socket);
-
-    /*
-    Supprime l'utilisateur de la mémoire.
-    */
-
-    users.delete(socket.id);
-
-    /*
-    Nettoyage des demandes d'ami
-    */
-
-    friendRequests.delete(socket.id);
-
-    for (const requests of friendRequests.values()) {
-      requests.delete(socket.id);
-    }
-
-    /*
-    Nettoyage des relations d'amitié
-    */
-
-    const myFriends = friends.get(socket.id);
-
-    if (myFriends) {
-
-      for (const friendId of myFriends) {
-
-        const friendSet = friends.get(friendId);
-
-        if (friendSet) {
-          friendSet.delete(socket.id);
-        }
-
-        if (users.has(friendId)) {
-          emitFriends(friendId);
-        }
-      }
-    }
-
-    friends.delete(socket.id);
-
-    emitOnlineUsers();
+  res.json({
+    token,
+    user: publicUser(user)
   });
 });
 
+app.post("/api/auth/login", (req, res) => {
+  const {
+    email,
+    password
+  } = req.body;
 
-/*
-====================================================
-                 QUITTER UN VOCAL
-====================================================
-*/
+  const normalizedEmail =
+    String(email || "")
+      .trim()
+      .toLowerCase();
 
-function leaveVoice(socket) {
+  const user = db.users.find(
+    u => u.email === normalizedEmail
+  );
 
-  const roomId = socket.data.voiceRoom;
-
-  if (!roomId) {
-    return;
+  if (
+    !user ||
+    !verifyPassword(password || "", user.password)
+  ) {
+    return res.status(401).json({
+      error: "Email ou mot de passe incorrect."
+    });
   }
 
-  const room = voiceRooms.get(roomId);
+  const token = createSession(user.id);
 
-  if (room) {
+  res.json({
+    token,
+    user: publicUser(user)
+  });
+});
 
-    room.delete(socket.id);
+app.post(
+  "/api/auth/logout",
+  auth,
+  (req, res) => {
+    sessions.delete(req.token);
 
-    socket.leave("voice:" + roomId);
+    res.json({
+      success: true
+    });
+  }
+);
 
-    socket
-      .to("voice:" + roomId)
-      .emit(
-        "user-left-voice",
+app.get(
+  "/api/auth/me",
+  auth,
+  (req, res) => {
+    res.json({
+      user: publicUser(req.user)
+    });
+  }
+);
+
+// ============================================================
+// PROFIL
+// ============================================================
+
+// Changer le nom d'affichage quand on veut
+app.patch(
+  "/api/profile/display-name",
+  auth,
+  (req, res) => {
+    const { displayName } = req.body;
+
+    if (!validDisplayName(displayName)) {
+      return res.status(400).json({
+        error:
+          "Le nom d'affichage doit contenir entre 1 et 32 caractères."
+      });
+    }
+
+    req.user.displayName =
+      displayName.trim();
+
+    saveDatabase();
+
+    io.emit("user:updated", {
+      user: publicUser(req.user)
+    });
+
+    res.json({
+      user: publicUser(req.user)
+    });
+  }
+);
+
+// Changer le nom d'utilisateur une fois tous les 14 jours
+app.patch(
+  "/api/profile/username",
+  auth,
+  (req, res) => {
+    const {
+      username
+    } = req.body;
+
+    const newUsername =
+      normalizeUsername(username);
+
+    if (!validUsername(newUsername)) {
+      return res.status(400).json({
+        error:
+          "Nom d'utilisateur invalide."
+      });
+    }
+
+    const fourteenDays =
+      14 * 24 * 60 * 60 * 1000;
+
+    const elapsed =
+      Date.now() -
+      (req.user.lastUsernameChange || 0);
+
+    if (elapsed < fourteenDays) {
+      const remaining =
+        fourteenDays - elapsed;
+
+      const days = Math.ceil(
+        remaining /
+          (24 * 60 * 60 * 1000)
+      );
+
+      return res.status(429).json({
+        error:
+          `Tu pourras changer ton nom d'utilisateur dans environ ${days} jour(s).`
+      });
+    }
+
+    const existing =
+      db.users.find(
+        user =>
+          user.username === newUsername &&
+          user.id !== req.user.id
+      );
+
+    if (existing) {
+      return res.status(409).json({
+        error:
+          "Ce nom d'utilisateur est déjà pris."
+      });
+    }
+
+    req.user.username =
+      newUsername;
+
+    req.user.lastUsernameChange =
+      Date.now();
+
+    saveDatabase();
+
+    io.emit("user:updated", {
+      user: publicUser(req.user)
+    });
+
+    res.json({
+      user: publicUser(req.user)
+    });
+  }
+);
+
+// ============================================================
+// RECHERCHE UTILISATEURS
+// ============================================================
+
+app.get(
+  "/api/users/search",
+  auth,
+  (req, res) => {
+    const query =
+      normalizeUsername(req.query.username);
+
+    if (!query) {
+      return res.json({
+        users: []
+      });
+    }
+
+    const users = db.users
+      .filter(user =>
+        user.username.includes(query)
+      )
+      .filter(user =>
+        user.id !== req.user.id
+      )
+      .slice(0, 20)
+      .map(publicUser);
+
+    res.json({
+      users
+    });
+  }
+);
+
+// ============================================================
+// AMIS
+// ============================================================
+
+// Envoyer une demande avec le nom d'utilisateur
+app.post(
+  "/api/friends/request",
+  auth,
+  (req, res) => {
+    const {
+      username
+    } = req.body;
+
+    const target =
+      findUserByUsername(username);
+
+    if (!target) {
+      return res.status(404).json({
+        error:
+          "Aucun utilisateur trouvé avec ce nom."
+      });
+    }
+
+    if (target.id === req.user.id) {
+      return res.status(400).json({
+        error:
+          "Tu ne peux pas t'ajouter toi-même."
+      });
+    }
+
+    if (
+      req.user.friends.includes(
+        target.id
+      )
+    ) {
+      return res.status(400).json({
+        error:
+          "Vous êtes déjà amis."
+      });
+    }
+
+    if (
+      target.incomingFriendRequests.includes(
+        req.user.id
+      )
+    ) {
+      return res.status(400).json({
+        error:
+          "Une demande est déjà en attente."
+      });
+    }
+
+    target.incomingFriendRequests.push(
+      req.user.id
+    );
+
+    req.user.outgoingFriendRequests.push(
+      target.id
+    );
+
+    saveDatabase();
+
+    io.to(`user:${target.id}`).emit(
+      "friend:request",
+      {
+        from: publicUser(req.user)
+      }
+    );
+
+    res.json({
+      success: true,
+      message:
+        "Demande d'ami envoyée."
+    });
+  }
+);
+
+// Accepter une demande
+app.post(
+  "/api/friends/accept",
+  auth,
+  (req, res) => {
+    const {
+      userId
+    } = req.body;
+
+    const requester =
+      findUserById(userId);
+
+    if (!requester) {
+      return res.status(404).json({
+        error:
+          "Utilisateur introuvable."
+      });
+    }
+
+    if (
+      !req.user.incomingFriendRequests.includes(
+        userId
+      )
+    ) {
+      return res.status(400).json({
+        error:
+          "Aucune demande en attente."
+      });
+    }
+
+    req.user.incomingFriendRequests =
+      req.user.incomingFriendRequests.filter(
+        id => id !== userId
+      );
+
+    requester.outgoingFriendRequests =
+      requester.outgoingFriendRequests.filter(
+        id => id !== req.user.id
+      );
+
+    if (
+      !req.user.friends.includes(
+        requester.id
+      )
+    ) {
+      req.user.friends.push(
+        requester.id
+      );
+    }
+
+    if (
+      !requester.friends.includes(
+        req.user.id
+      )
+    ) {
+      requester.friends.push(
+        req.user.id
+      );
+    }
+
+    saveDatabase();
+
+    io.to(`user:${requester.id}`).emit(
+      "friend:accepted",
+      {
+        user: publicUser(req.user)
+      }
+    );
+
+    res.json({
+      success: true
+    });
+  }
+);
+
+// Refuser une demande
+app.post(
+  "/api/friends/decline",
+  auth,
+  (req, res) => {
+    const {
+      userId
+    } = req.body;
+
+    req.user.incomingFriendRequests =
+      req.user.incomingFriendRequests.filter(
+        id => id !== userId
+      );
+
+    const requester =
+      findUserById(userId);
+
+    if (requester) {
+      requester.outgoingFriendRequests =
+        requester.outgoingFriendRequests.filter(
+          id => id !== req.user.id
+        );
+    }
+
+    saveDatabase();
+
+    res.json({
+      success: true
+    });
+  }
+);
+
+// Liste d'amis
+app.get(
+  "/api/friends",
+  auth,
+  (req, res) => {
+    const friends =
+      req.user.friends
+        .map(findUserById)
+        .filter(Boolean)
+        .map(publicUser);
+
+    const incoming =
+      req.user.incomingFriendRequests
+        .map(findUserById)
+        .filter(Boolean)
+        .map(publicUser);
+
+    res.json({
+      friends,
+      incomingRequests: incoming
+    });
+  }
+);
+
+// ============================================================
+// SERVEURS
+// ============================================================
+
+// Créer un serveur
+app.post(
+  "/api/servers",
+  auth,
+  (req, res) => {
+    const {
+      name
+    } = req.body;
+
+    if (
+      typeof name !== "string" ||
+      name.trim().length < 1 ||
+      name.trim().length > 50
+    ) {
+      return res.status(400).json({
+        error:
+          "Le nom du serveur doit contenir entre 1 et 50 caractères."
+      });
+    }
+
+    let inviteCode;
+
+    do {
+      inviteCode =
+        randomCode(8);
+    } while (
+      db.servers.some(
+        s => s.inviteCode === inviteCode
+      )
+    );
+
+    const newServer = {
+      id: id(),
+
+      name: name.trim(),
+
+      ownerId: req.user.id,
+
+      inviteCode,
+
+      createdAt: Date.now(),
+
+      members: [
+        {
+          userId: req.user.id,
+          role: "owner"
+        }
+      ],
+
+      roles: [
+        {
+          id: id(),
+          name: "everyone",
+          permissions: [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES",
+            "CONNECT",
+            "SPEAK"
+          ]
+        }
+      ],
+
+      channels: [
+        {
+          id: id(),
+          name: "général",
+          type: "text"
+        },
+        {
+          id: id(),
+          name: "Vocal général",
+          type: "voice"
+        }
+      ]
+    };
+
+    db.servers.push(
+      newServer
+    );
+
+    req.user.servers.push(
+      newServer.id
+    );
+
+    saveDatabase();
+
+    res.json({
+      server: newServer
+    });
+  }
+);
+
+// Rejoindre avec le code
+app.post(
+  "/api/servers/join",
+  auth,
+  (req, res) => {
+    const {
+      inviteCode
+    } = req.body;
+
+    const server =
+      db.servers.find(
+        s =>
+          s.inviteCode.toLowerCase() ===
+          String(inviteCode || "")
+            .trim()
+            .toLowerCase()
+      );
+
+    if (!server) {
+      return res.status(404).json({
+        error:
+          "Code d'invitation invalide."
+      });
+    }
+
+    if (
+      server.members.some(
+        member =>
+          member.userId === req.user.id
+      )
+    ) {
+      return res.status(400).json({
+        error:
+          "Tu es déjà membre de ce serveur."
+      });
+    }
+
+    server.members.push({
+      userId: req.user.id,
+      role: "member"
+    });
+
+    req.user.servers.push(
+      server.id
+    );
+
+    saveDatabase();
+
+    io.to(`server:${server.id}`).emit(
+      "server:member-joined",
+      {
+        user: publicUser(req.user)
+      }
+    );
+
+    res.json({
+      server
+    });
+  }
+);
+
+// Liste des serveurs de l'utilisateur
+app.get(
+  "/api/servers",
+  auth,
+  (req, res) => {
+    const servers =
+      req.user.servers
+        .map(serverId =>
+          db.servers.find(
+            server =>
+              server.id === serverId
+          )
+        )
+        .filter(Boolean);
+
+    res.json({
+      servers
+    });
+  }
+);
+
+// Informations serveur
+app.get(
+  "/api/servers/:serverId",
+  auth,
+  (req, res) => {
+    const server =
+      db.servers.find(
+        s =>
+          s.id === req.params.serverId
+      );
+
+    if (!server) {
+      return res.status(404).json({
+        error:
+          "Serveur introuvable."
+      });
+    }
+
+    const isMember =
+      server.members.some(
+        member =>
+          member.userId ===
+          req.user.id
+      );
+
+    if (!isMember) {
+      return res.status(403).json({
+        error:
+          "Tu n'es pas membre de ce serveur."
+      });
+    }
+
+    const members =
+      server.members
+        .map(member => {
+          const user =
+            findUserById(
+              member.userId
+            );
+
+          return user
+            ? {
+                ...publicUser(user),
+                role: member.role
+              }
+            : null;
+        })
+        .filter(Boolean);
+
+    res.json({
+      server,
+      members
+    });
+  }
+);
+
+// Supprimer un serveur
+app.delete(
+  "/api/servers/:serverId",
+  auth,
+  (req, res) => {
+    const serverIndex =
+      db.servers.findIndex(
+        s =>
+          s.id ===
+          req.params.serverId
+      );
+
+    if (serverIndex === -1) {
+      return res.status(404).json({
+        error:
+          "Serveur introuvable."
+      });
+    }
+
+    const server =
+      db.servers[serverIndex];
+
+    if (
+      server.ownerId !==
+      req.user.id
+    ) {
+      return res.status(403).json({
+        error:
+          "Seul le propriétaire peut supprimer le serveur."
+      });
+    }
+
+    db.servers.splice(
+      serverIndex,
+      1
+    );
+
+    for (const user of db.users) {
+      user.servers =
+        user.servers.filter(
+          serverId =>
+            serverId !==
+            server.id
+        );
+    }
+
+    saveDatabase();
+
+    io.to(`server:${server.id}`).emit(
+      "server:deleted",
+      {
+        serverId: server.id
+      }
+    );
+
+    res.json({
+      success: true
+    });
+  }
+);
+
+// ============================================================
+// MESSAGES PRIVÉS
+// ============================================================
+
+function getConversationId(a, b) {
+  return [a, b]
+    .sort()
+    .join(":");
+}
+
+app.get(
+  "/api/dms/:userId",
+  auth,
+  (req, res) => {
+    const otherUser =
+      findUserById(
+        req.params.userId
+      );
+
+    if (!otherUser) {
+      return res.status(404).json({
+        error:
+          "Utilisateur introuvable."
+      });
+    }
+
+    const conversationId =
+      getConversationId(
+        req.user.id,
+        otherUser.id
+      );
+
+    const messages =
+      db.messages.filter(
+        message =>
+          message.conversationId ===
+          conversationId
+      );
+
+    res.json({
+      conversationId,
+      messages
+    });
+  }
+);
+
+app.post(
+  "/api/dms/:userId",
+  auth,
+  (req, res) => {
+    const otherUser =
+      findUserById(
+        req.params.userId
+      );
+
+    if (!otherUser) {
+      return res.status(404).json({
+        error:
+          "Utilisateur introuvable."
+      });
+    }
+
+    const {
+      content
+    } = req.body;
+
+    if (
+      typeof content !== "string" ||
+      !content.trim()
+    ) {
+      return res.status(400).json({
+        error:
+          "Message vide."
+      });
+    }
+
+    const conversationId =
+      getConversationId(
+        req.user.id,
+        otherUser.id
+      );
+
+    const message = {
+      id: id(),
+
+      conversationId,
+
+      senderId:
+        req.user.id,
+
+      receiverId:
+        otherUser.id,
+
+      content:
+        content.trim(),
+
+      createdAt:
+        Date.now()
+    };
+
+    db.messages.push(
+      message
+    );
+
+    // Évite une base qui grossit sans limite
+    if (db.messages.length > 100000) {
+      db.messages =
+        db.messages.slice(
+          -100000
+        );
+    }
+
+    saveDatabase();
+
+    io.to(
+      `user:${otherUser.id}`
+    ).emit(
+      "dm:new",
+      message
+    );
+
+    io.to(
+      `user:${req.user.id}`
+    ).emit(
+      "dm:new",
+      message
+    );
+
+    res.json({
+      message
+    });
+  }
+);
+
+// ============================================================
+// SOCKET.IO
+// ============================================================
+
+const socketUsers =
+  new Map();
+
+io.on("connection", socket => {
+  console.log(
+    "Socket connecté :",
+    socket.id
+  );
+
+  // ----------------------------------------------------------
+  // AUTH SOCKET
+  // ----------------------------------------------------------
+
+  socket.on(
+    "authenticate",
+    token => {
+      const user =
+        getUserFromToken(token);
+
+      if (!user) {
+        socket.emit(
+          "auth:error",
+          {
+            error:
+              "Session invalide."
+          }
+        );
+
+        return;
+      }
+
+      socketUsers.set(
+        socket.id,
+        user.id
+      );
+
+      socket.userId =
+        user.id;
+
+      socket.join(
+        `user:${user.id}`
+      );
+
+      socket.emit(
+        "authenticated",
+        {
+          user:
+            publicUser(user)
+        }
+      );
+
+      console.log(
+        `${user.username} connecté`
+      );
+    }
+  );
+
+  // ----------------------------------------------------------
+  // SERVEUR
+  // ----------------------------------------------------------
+
+  socket.on(
+    "server:join",
+    serverId => {
+      if (!socket.userId) return;
+
+      const server =
+        db.servers.find(
+          s =>
+            s.id === serverId
+        );
+
+      if (!server) return;
+
+      const member =
+        server.members.some(
+          m =>
+            m.userId ===
+            socket.userId
+        );
+
+      if (!member) return;
+
+      socket.join(
+        `server:${serverId}`
+      );
+    }
+  );
+
+  socket.on(
+    "server:leave",
+    serverId => {
+      socket.leave(
+        `server:${serverId}`
+      );
+    }
+  );
+
+  // ----------------------------------------------------------
+  // VOCAL
+  // ----------------------------------------------------------
+
+  socket.on(
+    "voice:join",
+    data => {
+      if (!socket.userId) return;
+
+      const {
+        serverId,
+        roomId
+      } = data || {};
+
+      if (!serverId || !roomId) {
+        return;
+      }
+
+      const server =
+        db.servers.find(
+          s =>
+            s.id === serverId
+        );
+
+      if (!server) return;
+
+      const member =
+        server.members.some(
+          m =>
+            m.userId ===
+            socket.userId
+        );
+
+      if (!member) return;
+
+      const room =
+        `voice:${serverId}:${roomId}`;
+
+      socket.join(room);
+
+      const users =
+        [];
+
+      const sockets =
+        io.sockets.adapter.rooms.get(
+          room
+        );
+
+      if (sockets) {
+        for (
+          const socketId of sockets
+        ) {
+          const userId =
+            socketUsers.get(
+              socketId
+            );
+
+          const user =
+            findUserById(
+              userId
+            );
+
+          if (user) {
+            users.push(
+              publicUser(user)
+            );
+          }
+        }
+      }
+
+      socket.emit(
+        "voice:users",
+        {
+          users
+        }
+      );
+
+      socket.to(room).emit(
+        "voice:user-joined",
+        {
+          user:
+            publicUser(
+              findUserById(
+                socket.userId
+              )
+            )
+        }
+      );
+    }
+  );
+
+  socket.on(
+    "voice:leave",
+    data => {
+      if (!socket.userId) return;
+
+      const {
+        serverId,
+        roomId
+      } = data || {};
+
+      if (!serverId || !roomId) {
+        return;
+      }
+
+      const room =
+        `voice:${serverId}:${roomId}`;
+
+      socket.leave(room);
+
+      socket.to(room).emit(
+        "voice:user-left",
+        {
+          userId:
+            socket.userId
+        }
+      );
+    }
+  );
+
+  // ----------------------------------------------------------
+  // WEBRTC SIGNALING
+  // ----------------------------------------------------------
+
+  socket.on(
+    "webrtc:offer",
+    data => {
+      if (!socket.userId) return;
+
+      const {
+        targetSocketId,
+        offer
+      } = data || {};
+
+      if (!targetSocketId || !offer) {
+        return;
+      }
+
+      io.to(
+        targetSocketId
+      ).emit(
+        "webrtc:offer",
+        {
+          fromSocketId:
+            socket.id,
+          fromUserId:
+            socket.userId,
+          offer
+        }
+      );
+    }
+  );
+
+  socket.on(
+    "webrtc:answer",
+    data => {
+      if (!socket.userId) return;
+
+      const {
+        targetSocketId,
+        answer
+      } = data || {};
+
+      if (
+        !targetSocketId ||
+        !answer
+      ) {
+        return;
+      }
+
+      io.to(
+        targetSocketId
+      ).emit(
+        "webrtc:answer",
+        {
+          fromSocketId:
+            socket.id,
+          fromUserId:
+            socket.userId,
+          answer
+        }
+      );
+    }
+  );
+
+  socket.on(
+    "webrtc:ice-candidate",
+    data => {
+      if (!socket.userId) return;
+
+      const {
+        targetSocketId,
+        candidate
+      } = data || {};
+
+      if (
+        !targetSocketId ||
+        !candidate
+      ) {
+        return;
+      }
+
+      io.to(
+        targetSocketId
+      ).emit(
+        "webrtc:ice-candidate",
+        {
+          fromSocketId:
+            socket.id,
+          fromUserId:
+            socket.userId,
+          candidate
+        }
+      );
+    }
+  );
+
+  // ----------------------------------------------------------
+  // APPEL DIRECT ENTRE AMIS
+  // ----------------------------------------------------------
+
+  socket.on(
+    "call:invite",
+    data => {
+      if (!socket.userId) return;
+
+      const {
+        targetUserId,
+        callType
+      } = data || {};
+
+      if (!targetUserId) return;
+
+      const target =
+        findUserById(
+          targetUserId
+        );
+
+      if (!target) return;
+
+      io.to(
+        `user:${targetUserId}`
+      ).emit(
+        "call:incoming",
+        {
+          from:
+            publicUser(
+              findUserById(
+                socket.userId
+              )
+            ),
+          callType:
+            callType === "video"
+              ? "video"
+              : "audio"
+        }
+      );
+    }
+  );
+
+  socket.on(
+    "call:accept",
+    data => {
+      if (!socket.userId) return;
+
+      const {
+        targetUserId
+      } = data || {};
+
+      if (!targetUserId) return;
+
+      io.to(
+        `user:${targetUserId}`
+      ).emit(
+        "call:accepted",
+        {
+          user:
+            publicUser(
+              findUserById(
+                socket.userId
+              )
+            )
+        }
+      );
+    }
+  );
+
+  socket.on(
+    "call:decline",
+    data => {
+      if (!socket.userId) return;
+
+      const {
+        targetUserId
+      } = data || {};
+
+      if (!targetUserId) return;
+
+      io.to(
+        `user:${targetUserId}`
+      ).emit(
+        "call:declined",
+        {
+          userId:
+            socket.userId
+        }
+      );
+    }
+  );
+
+  socket.on(
+    "call:end",
+    data => {
+      if (!socket.userId) return;
+
+      const {
+        targetUserId
+      } = data || {};
+
+      if (!targetUserId) return;
+
+      io.to(
+        `user:${targetUserId}`
+      ).emit(
+        "call:ended",
+        {
+          userId:
+            socket.userId
+        }
+      );
+    }
+  );
+
+  // ----------------------------------------------------------
+  // PARTAGE D'ÉCRAN
+  // ----------------------------------------------------------
+
+  socket.on(
+    "screen:started",
+    data => {
+      if (!socket.userId) return;
+
+      const {
+        room
+      } = data || {};
+
+      if (!room) return;
+
+      socket.to(room).emit(
+        "screen:started",
+        {
+          user:
+            publicUser(
+              findUserById(
+                socket.userId
+              )
+            )
+        }
+      );
+    }
+  );
+
+  socket.on(
+    "screen:stopped",
+    data => {
+      if (!socket.userId) return;
+
+      const {
+        room
+      } = data || {};
+
+      if (!room) return;
+
+      socket.to(room).emit(
+        "screen:stopped",
+        {
+          userId:
+            socket.userId
+        }
+      );
+    }
+  );
+
+  // ----------------------------------------------------------
+  // DISCONNECT
+  // ----------------------------------------------------------
+
+  socket.on(
+    "disconnect",
+    () => {
+      const userId =
+        socketUsers.get(
+          socket.id
+        );
+
+      socketUsers.delete(
         socket.id
       );
 
-    if (room.size === 0) {
-      voiceRooms.delete(roomId);
-    } else {
-      emitVoiceUsers(roomId);
+      if (userId) {
+        console.log(
+          "Utilisateur déconnecté :",
+          userId
+        );
+      }
     }
-  }
-
-  socket.data.voiceRoom = null;
-}
-
-
-/*
-====================================================
-                       API
-====================================================
-*/
-
-app.get("/api/status", (req, res) => {
-
-  res.json({
-    online: users.size,
-    voiceRooms: [...voiceRooms.entries()].map(
-      ([name, members]) => ({
-        name,
-        users: members.size
-      })
-    )
-  });
-});
-
-
-/*
-====================================================
-                    DÉMARRAGE
-====================================================
-*/
-
-server.listen(PORT, "0.0.0.0", () => {
-
-  console.log(
-    `NovaChat lancé sur le port ${PORT}`
   );
-
 });
+
+// ============================================================
+// ROUTE PRINCIPALE
+// ============================================================
+
+app.get(
+  "/health",
+  (req, res) => {
+    res.json({
+      status: "ok",
+      service: "NovaChat",
+      time: new Date().toISOString()
+    });
+  }
+);
+
+// ============================================================
+// START
+// ============================================================
+
+server.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+    console.log(
+      `NovaChat lancé sur le port ${PORT}`
+    );
+
+    console.log(
+      `http://localhost:${PORT}`
+    );
+  }
+);
+```
