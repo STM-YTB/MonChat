@@ -1,1650 +1,944 @@
 const express = require("express");
 const http = require("http");
-const WebSocket = require("ws");
+const { Server } = require("socket.io");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
 const app = express();
 const server = http.createServer(app);
+const io = new Server(server);
 
-const PORT = Number(process.env.PORT) || 3000;
-
-const PUBLIC_DIR = path.join(__dirname, "public");
+const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, "data");
-const ACCOUNTS_FILE = path.join(DATA_DIR, "accounts.json");
-const CHAT_FILE = path.join(DATA_DIR, "chat.json");
+const DB_FILE = path.join(DATA_DIR, "database.json");
 
-/* =========================================================
-   EXPRESS
-========================================================= */
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+const defaultDatabase = {
+  users: [],
+  servers: [],
+  messages: [],
+  friendRequests: []
+};
+
+let db = loadDatabase();
+
+function loadDatabase() {
+  try {
+    if (!fs.existsSync(DB_FILE)) {
+      fs.writeFileSync(
+        DB_FILE,
+        JSON.stringify(defaultDatabase, null, 2),
+        "utf8"
+      );
+      return JSON.parse(JSON.stringify(defaultDatabase));
+    }
+
+    const content = fs.readFileSync(DB_FILE, "utf8");
+
+    if (!content.trim()) {
+      return JSON.parse(JSON.stringify(defaultDatabase));
+    }
+
+    const parsed = JSON.parse(content);
+
+    return {
+      users: Array.isArray(parsed.users) ? parsed.users : [],
+      servers: Array.isArray(parsed.servers) ? parsed.servers : [],
+      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+      friendRequests: Array.isArray(parsed.friendRequests)
+        ? parsed.friendRequests
+        : []
+    };
+  } catch (error) {
+    console.error("Erreur lecture database:", error);
+    return JSON.parse(JSON.stringify(defaultDatabase));
+  }
+}
+
+function saveDatabase() {
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), "utf8");
+  } catch (error) {
+    console.error("Erreur sauvegarde database:", error);
+  }
+}
+
+function id(prefix = "") {
+  return prefix + crypto.randomBytes(8).toString("hex");
+}
+
+function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
+  const hash = crypto
+    .pbkdf2Sync(password, salt, 100000, 64, "sha512")
+    .toString("hex");
+
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  try {
+    const parts = stored.split(":");
+
+    if (parts.length !== 2) return false;
+
+    const salt = parts[0];
+    const originalHash = parts[1];
+
+    const hash = crypto
+      .pbkdf2Sync(password, salt, 100000, 64, "sha512")
+      .toString("hex");
+
+    return crypto.timingSafeEqual(
+      Buffer.from(hash, "hex"),
+      Buffer.from(originalHash, "hex")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function cleanUser(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.displayName,
+    avatar: user.avatar || "",
+    friends: user.friends || []
+  };
+}
+
+function findUser(identifier) {
+  const value = String(identifier || "").trim().toLowerCase();
+
+  return db.users.find(
+    user =>
+      user.id === identifier ||
+      user.username.toLowerCase() === value ||
+      user.email.toLowerCase() === value
+  );
+}
+
+function createDefaultServer(ownerId, name) {
+  const serverId = id("srv_");
+
+  return {
+    id: serverId,
+    name,
+    icon: "",
+    ownerId,
+    members: [ownerId],
+    roles: [
+      {
+        id: "role_everyone",
+        name: "@everyone",
+        color: "#ffffff",
+        permissions: ["view", "message", "voice"]
+      },
+      {
+        id: "role_admin",
+        name: "Administrateur",
+        color: "#ff4757",
+        permissions: ["all"]
+      }
+    ],
+    channels: [
+      {
+        id: id("chn_"),
+        name: "general",
+        type: "text",
+        position: 0
+      },
+      {
+        id: id("chn_"),
+        name: "general",
+        type: "voice",
+        position: 1
+      }
+    ],
+    invites: [],
+    emojis: [],
+    stickers: [],
+    soundboard: [],
+    logs: [],
+    bans: []
+  };
+}
 
 app.use(express.json({ limit: "10mb" }));
-app.use(express.static(PUBLIC_DIR));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-app.get("/", (req, res) => {
-    res.sendFile(path.join(PUBLIC_DIR, "index.html"));
+app.use(express.static(path.join(__dirname, "public")));
+
+app.get("/api/health", (req, res) => {
+  res.json({
+    ok: true,
+    service: "NovaChat",
+    time: new Date().toISOString()
+  });
 });
-
-/* =========================================================
-   DATABASE
-========================================================= */
-
-function ensureDataFolder() {
-    if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-}
-
-function createAccountsDatabase() {
-    return {
-        accounts: []
-    };
-}
-
-function createChatDatabase() {
-    return {
-        channels: {
-            general: []
-        },
-        privateMessages: {},
-        servers: {}
-    };
-}
-
-let accountsDB = createAccountsDatabase();
-let chatDB = createChatDatabase();
-
-/* =========================================================
-   LOAD DATABASE
-========================================================= */
-
-function loadAccounts() {
-    try {
-        ensureDataFolder();
-
-        if (!fs.existsSync(ACCOUNTS_FILE)) {
-            accountsDB = createAccountsDatabase();
-            saveAccounts();
-            return;
-        }
-
-        const content = fs.readFileSync(
-            ACCOUNTS_FILE,
-            "utf8"
-        );
-
-        if (!content.trim()) {
-            accountsDB = createAccountsDatabase();
-            saveAccounts();
-            return;
-        }
-
-        const parsed = JSON.parse(content);
-
-        if (
-            parsed &&
-            Array.isArray(parsed.accounts)
-        ) {
-            accountsDB = parsed;
-        } else {
-            accountsDB = createAccountsDatabase();
-        }
-
-    } catch (error) {
-        console.error(
-            "Erreur chargement comptes :",
-            error
-        );
-
-        accountsDB = createAccountsDatabase();
-    }
-}
-
-function loadChat() {
-    try {
-        ensureDataFolder();
-
-        if (!fs.existsSync(CHAT_FILE)) {
-            chatDB = createChatDatabase();
-            saveChat();
-            return;
-        }
-
-        const content = fs.readFileSync(
-            CHAT_FILE,
-            "utf8"
-        );
-
-        if (!content.trim()) {
-            chatDB = createChatDatabase();
-            saveChat();
-            return;
-        }
-
-        const parsed = JSON.parse(content);
-
-        chatDB = {
-            ...createChatDatabase(),
-            ...parsed
-        };
-
-        if (!chatDB.channels) {
-            chatDB.channels = {
-                general: []
-            };
-        }
-
-        if (!chatDB.channels.general) {
-            chatDB.channels.general = [];
-        }
-
-        if (!chatDB.privateMessages) {
-            chatDB.privateMessages = {};
-        }
-
-        if (!chatDB.servers) {
-            chatDB.servers = {};
-        }
-
-    } catch (error) {
-        console.error(
-            "Erreur chargement chat :",
-            error
-        );
-
-        chatDB = createChatDatabase();
-    }
-}
-
-function saveAccounts() {
-    try {
-        ensureDataFolder();
-
-        fs.writeFileSync(
-            ACCOUNTS_FILE,
-            JSON.stringify(
-                accountsDB,
-                null,
-                2
-            ),
-            "utf8"
-        );
-    } catch (error) {
-        console.error(
-            "Erreur sauvegarde comptes :",
-            error
-        );
-    }
-}
-
-function saveChat() {
-    try {
-        ensureDataFolder();
-
-        fs.writeFileSync(
-            CHAT_FILE,
-            JSON.stringify(
-                chatDB,
-                null,
-                2
-            ),
-            "utf8"
-        );
-    } catch (error) {
-        console.error(
-            "Erreur sauvegarde chat :",
-            error
-        );
-    }
-}
-
-/*
-IMPORTANT :
-Les variables sont créées AVANT le chargement.
-*/
-
-loadAccounts();
-loadChat();
-
-/* =========================================================
-   PASSWORD
-========================================================= */
-
-function hashPassword(password) {
-    const salt =
-        crypto.randomBytes(16).toString("hex");
-
-    const hash =
-        crypto.scryptSync(
-            String(password),
-            salt,
-            64
-        ).toString("hex");
-
-    return salt + ":" + hash;
-}
-
-function verifyPassword(
-    password,
-    storedPassword
-) {
-    try {
-        const parts =
-            String(storedPassword).split(":");
-
-        if (parts.length !== 2) {
-            return false;
-        }
-
-        const salt = parts[0];
-        const originalHash = parts[1];
-
-        const hash =
-            crypto.scryptSync(
-                String(password),
-                salt,
-                64
-            ).toString("hex");
-
-        const a = Buffer.from(
-            hash,
-            "hex"
-        );
-
-        const b = Buffer.from(
-            originalHash,
-            "hex"
-        );
-
-        if (a.length !== b.length) {
-            return false;
-        }
-
-        return crypto.timingSafeEqual(
-            a,
-            b
-        );
-
-    } catch (error) {
-        return false;
-    }
-}
-
-/* =========================================================
-   HELPERS
-========================================================= */
-
-function makeId(prefix) {
-    return (
-        prefix +
-        "_" +
-        crypto.randomBytes(12).toString("hex")
-    );
-}
-
-function cleanText(value, max = 100) {
-    return String(value || "")
-        .trim()
-        .replace(/\s+/g, " ")
-        .substring(0, max);
-}
-
-function normalizeEmail(email) {
-    return String(email || "")
-        .trim()
-        .toLowerCase();
-}
-
-function normalizeUsername(username) {
-    return cleanText(username, 32)
-        .toLowerCase();
-}
-
-function displayNameFromUsername(username) {
-    return cleanText(username, 32);
-}
-
-function getAvatar(username) {
-    const name = cleanText(username);
-
-    if (!name) {
-        return "?";
-    }
-
-    return name.charAt(0).toUpperCase();
-}
-
-/* =========================================================
-   ACCOUNT HELPERS
-========================================================= */
-
-function findAccountByEmail(email) {
-    const normalized =
-        normalizeEmail(email);
-
-    return accountsDB.accounts.find(
-        account =>
-            account.email === normalized
-    );
-}
-
-function findAccountByUsername(username) {
-    const normalized =
-        normalizeUsername(username);
-
-    return accountsDB.accounts.find(
-        account =>
-            account.username === normalized
-    );
-}
-
-function publicAccount(account) {
-    return {
-        id: account.id,
-        email: account.email,
-        username: account.username,
-        displayName:
-            account.displayName,
-        avatar:
-            account.avatar,
-        createdAt:
-            account.createdAt
-    };
-}
-
-/* =========================================================
-   HTTP ACCOUNT API
-========================================================= */
-
-/*
-CREATE ACCOUNT
-*/
 
 app.post("/api/register", (req, res) => {
-    try {
-        const email =
-            normalizeEmail(req.body.email);
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const username = String(req.body.username || "").trim();
+    const password = String(req.body.password || "");
+    const displayName =
+      String(req.body.displayName || username).trim() || username;
 
-        const password =
-            String(req.body.password || "");
-
-        const username =
-            cleanText(
-                req.body.username,
-                32
-            );
-
-        if (!email) {
-            return res.status(400).json({
-                success: false,
-                error:
-                    "L'email est obligatoire."
-            });
-        }
-
-        if (!password) {
-            return res.status(400).json({
-                success: false,
-                error:
-                    "Le mot de passe est obligatoire."
-            });
-        }
-
-        if (password.length < 6) {
-            return res.status(400).json({
-                success: false,
-                error:
-                    "Le mot de passe doit contenir au moins 6 caractères."
-            });
-        }
-
-        if (!username) {
-            return res.status(400).json({
-                success: false,
-                error:
-                    "Le nom d'utilisateur est obligatoire."
-            });
-        }
-
-        if (
-            !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
-                email
-            )
-        ) {
-            return res.status(400).json({
-                success: false,
-                error:
-                    "Adresse email invalide."
-            });
-        }
-
-        if (findAccountByEmail(email)) {
-            return res.status(409).json({
-                success: false,
-                error:
-                    "Cette adresse email est déjà utilisée."
-            });
-        }
-
-        if (
-            findAccountByUsername(username)
-        ) {
-            return res.status(409).json({
-                success: false,
-                error:
-                    "Ce nom d'utilisateur est déjà utilisé."
-            });
-        }
-
-        const account = {
-            id: makeId("account"),
-            email,
-            passwordHash:
-                hashPassword(password),
-            username:
-                normalizeUsername(username),
-            displayName:
-                displayNameFromUsername(
-                    username
-                ),
-            avatar:
-                getAvatar(username),
-            createdAt: Date.now()
-        };
-
-        accountsDB.accounts.push(account);
-
-        saveAccounts();
-
-        return res.status(201).json({
-            success: true,
-            message:
-                "Compte créé avec succès.",
-            user:
-                publicAccount(account)
-        });
-
-    } catch (error) {
-        console.error(
-            "Erreur création compte :",
-            error
-        );
-
-        return res.status(500).json({
-            success: false,
-            error:
-                "Une erreur est survenue lors de la création du compte."
-        });
+    if (!email || !username || !password) {
+      return res.status(400).json({
+        ok: false,
+        error: "Tous les champs obligatoires doivent être remplis."
+      });
     }
-});
 
-/*
-LOGIN
-*/
+    if (password.length < 6) {
+      return res.status(400).json({
+        ok: false,
+        error: "Le mot de passe doit contenir au moins 6 caractères."
+      });
+    }
+
+    if (db.users.some(u => u.email.toLowerCase() === email)) {
+      return res.status(409).json({
+        ok: false,
+        error: "Cette adresse email est déjà utilisée."
+      });
+    }
+
+    if (db.users.some(u => u.username.toLowerCase() === username.toLowerCase())) {
+      return res.status(409).json({
+        ok: false,
+        error: "Ce nom d'utilisateur est déjà utilisé."
+      });
+    }
+
+    const user = {
+      id: id("usr_"),
+      email,
+      username,
+      displayName,
+      password: hashPassword(password),
+      avatar: "",
+      friends: [],
+      createdAt: Date.now()
+    };
+
+    db.users.push(user);
+
+    const serverDefault = createDefaultServer(user.id, `${displayName}'s Server`);
+    db.servers.push(serverDefault);
+
+    saveDatabase();
+
+    res.json({
+      ok: true,
+      user: cleanUser(user),
+      servers: db.servers.filter(s => s.members.includes(user.id))
+    });
+  } catch (error) {
+    console.error("REGISTER ERROR:", error);
+
+    res.status(500).json({
+      ok: false,
+      error: "Une erreur est survenue pendant la création du compte."
+    });
+  }
+});
 
 app.post("/api/login", (req, res) => {
-    try {
-        const email =
-            normalizeEmail(req.body.email);
+  try {
+    const identifier = String(req.body.identifier || "").trim();
+    const password = String(req.body.password || "");
 
-        const password =
-            String(req.body.password || "");
+    const user = findUser(identifier);
 
-        if (!email || !password) {
-            return res.status(400).json({
-                success: false,
-                error:
-                    "Email et mot de passe obligatoires."
-            });
-        }
-
-        const account =
-            findAccountByEmail(email);
-
-        if (!account) {
-            return res.status(401).json({
-                success: false,
-                error:
-                    "Email ou mot de passe incorrect."
-            });
-        }
-
-        if (
-            !verifyPassword(
-                password,
-                account.passwordHash
-            )
-        ) {
-            return res.status(401).json({
-                success: false,
-                error:
-                    "Email ou mot de passe incorrect."
-            });
-        }
-
-        return res.json({
-            success: true,
-            message:
-                "Connexion réussie.",
-            user:
-                publicAccount(account)
-        });
-
-    } catch (error) {
-        console.error(
-            "Erreur connexion :",
-            error
-        );
-
-        return res.status(500).json({
-            success: false,
-            error:
-                "Une erreur est survenue lors de la connexion."
-        });
+    if (!user || !verifyPassword(password, user.password)) {
+      return res.status(401).json({
+        ok: false,
+        error: "Identifiants incorrects."
+      });
     }
-});
 
-/*
-CHECK ACCOUNT
-*/
-
-app.post("/api/check-account", (req, res) => {
-    const email =
-        normalizeEmail(req.body.email);
-
-    const username =
-        normalizeUsername(
-            req.body.username
-        );
-
-    return res.json({
-        emailAvailable:
-            email
-                ? !findAccountByEmail(email)
-                : false,
-
-        usernameAvailable:
-            username
-                ? !findAccountByUsername(username)
-                : false
+    res.json({
+      ok: true,
+      user: cleanUser(user),
+      servers: db.servers.filter(s => s.members.includes(user.id))
     });
+  } catch (error) {
+    console.error("LOGIN ERROR:", error);
+
+    res.status(500).json({
+      ok: false,
+      error: "Erreur pendant la connexion."
+    });
+  }
 });
 
-/* =========================================================
-   WEBSOCKET
-========================================================= */
+app.get("/api/user/:userId", (req, res) => {
+  const user = db.users.find(u => u.id === req.params.userId);
 
-const wss = new WebSocket.Server({
-    server
+  if (!user) {
+    return res.status(404).json({
+      ok: false,
+      error: "Utilisateur introuvable."
+    });
+  }
+
+  res.json({
+    ok: true,
+    user: cleanUser(user)
+  });
 });
 
-const clients = new Map();
+app.get("/api/friends/:userId", (req, res) => {
+  const user = db.users.find(u => u.id === req.params.userId);
 
-/* =========================================================
-   WEBSOCKET HELPERS
-========================================================= */
+  if (!user) {
+    return res.status(404).json({
+      ok: false,
+      error: "Utilisateur introuvable."
+    });
+  }
 
-function wsSend(ws, data) {
-    if (
-        ws &&
-        ws.readyState === WebSocket.OPEN
-    ) {
-        try {
-            ws.send(
-                JSON.stringify(data)
-            );
-        } catch (error) {
-            console.error(
-                "Erreur envoi WebSocket :",
-                error
-            );
-        }
-    }
-}
+  const friends = (user.friends || [])
+    .map(friendId => db.users.find(u => u.id === friendId))
+    .filter(Boolean)
+    .map(cleanUser);
 
-function wsBroadcast(
-    data,
-    except = null
-) {
-    for (
-        const client of clients.values()
-    ) {
-        if (client.ws !== except) {
-            wsSend(client.ws, data);
-        }
-    }
-}
-
-function onlineUsers() {
-    return Array.from(
-        clients.values()
-    ).map(client => ({
-        id: client.id,
-        accountId: client.accountId,
-        username: client.username,
-        displayName:
-            client.displayName,
-        avatar: client.avatar,
-        voiceRoom:
-            client.voiceRoom
+  const requests = db.friendRequests
+    .filter(
+      r =>
+        (r.from === user.id || r.to === user.id) &&
+        r.status === "pending"
+    )
+    .map(r => ({
+      ...r,
+      fromUser: cleanUser(db.users.find(u => u.id === r.from)),
+      toUser: cleanUser(db.users.find(u => u.id === r.to))
     }));
-}
 
-function broadcastPresence() {
-    wsBroadcast({
-        type: "presence",
-        users: onlineUsers()
-    });
-}
-
-/* =========================================================
-   WEBSOCKET CONNECTION
-========================================================= */
-
-wss.on("connection", ws => {
-
-    let client = null;
-
-    ws.isAlive = true;
-
-    ws.on("pong", () => {
-        ws.isAlive = true;
-    });
-
-    ws.on("message", raw => {
-
-        let data;
-
-        try {
-            data = JSON.parse(
-                raw.toString()
-            );
-        } catch {
-            wsSend(ws, {
-                type: "error-message",
-                message:
-                    "Message invalide."
-            });
-
-            return;
-        }
-
-        if (
-            !data ||
-            typeof data !== "object"
-        ) {
-            return;
-        }
-
-        const type =
-            String(data.type || "");
-
-        /* =================================================
-           AUTH VIA WEBSOCKET
-        ================================================= */
-
-        /*
-         Certaines versions de ton index.html
-         peuvent utiliser WebSocket directement
-         pour créer le compte.
-        */
-
-        if (
-            type === "register" ||
-            type === "create-account" ||
-            type === "signup"
-        ) {
-
-            const email =
-                normalizeEmail(
-                    data.email
-                );
-
-            const password =
-                String(
-                    data.password || ""
-                );
-
-            const username =
-                cleanText(
-                    data.username ||
-                    data.nomUtilisateur ||
-                    data.name,
-                    32
-                );
-
-            if (
-                !email ||
-                !password ||
-                !username
-            ) {
-                wsSend(ws, {
-                    type:
-                        "register-error",
-                    success: false,
-                    error:
-                        "Tous les champs sont obligatoires."
-                });
-
-                return;
-            }
-
-            if (password.length < 6) {
-                wsSend(ws, {
-                    type:
-                        "register-error",
-                    success: false,
-                    error:
-                        "Le mot de passe doit contenir au moins 6 caractères."
-                });
-
-                return;
-            }
-
-            if (
-                findAccountByEmail(email)
-            ) {
-                wsSend(ws, {
-                    type:
-                        "register-error",
-                    success: false,
-                    error:
-                        "Cette adresse email est déjà utilisée."
-                });
-
-                return;
-            }
-
-            if (
-                findAccountByUsername(
-                    username
-                )
-            ) {
-                wsSend(ws, {
-                    type:
-                        "register-error",
-                    success: false,
-                    error:
-                        "Ce nom d'utilisateur est déjà utilisé."
-                });
-
-                return;
-            }
-
-            const account = {
-                id: makeId("account"),
-                email,
-                passwordHash:
-                    hashPassword(
-                        password
-                    ),
-                username:
-                    normalizeUsername(
-                        username
-                    ),
-                displayName:
-                    displayNameFromUsername(
-                        username
-                    ),
-                avatar:
-                    getAvatar(username),
-                createdAt: Date.now()
-            };
-
-            accountsDB.accounts.push(
-                account
-            );
-
-            saveAccounts();
-
-            wsSend(ws, {
-                type:
-                    "register-success",
-                success: true,
-                user:
-                    publicAccount(
-                        account
-                    )
-            });
-
-            return;
-        }
-
-        /*
-        LOGIN WEBSOCKET
-        */
-
-        if (
-            type === "login-account" ||
-            type === "account-login"
-        ) {
-
-            const email =
-                normalizeEmail(
-                    data.email
-                );
-
-            const password =
-                String(
-                    data.password || ""
-                );
-
-            const account =
-                findAccountByEmail(
-                    email
-                );
-
-            if (
-                !account ||
-                !verifyPassword(
-                    password,
-                    account.passwordHash
-                )
-            ) {
-                wsSend(ws, {
-                    type:
-                        "login-error",
-                    success: false,
-                    error:
-                        "Email ou mot de passe incorrect."
-                });
-
-                return;
-            }
-
-            wsSend(ws, {
-                type:
-                    "login-account-success",
-                success: true,
-                user:
-                    publicAccount(
-                        account
-                    )
-            });
-
-            return;
-        }
-
-        /* =================================================
-           LOGIN CHAT
-        ================================================= */
-
-        if (type === "login") {
-
-            if (client) {
-                return;
-            }
-
-            const accountId =
-                String(
-                    data.accountId || ""
-                );
-
-            const account =
-                accountsDB.accounts.find(
-                    item =>
-                        item.id === accountId
-                );
-
-            if (!account) {
-
-                /*
-                 * Compatibilité avec l'ancien
-                 * système qui envoyait seulement
-                 * un username.
-                 */
-
-                const username =
-                    cleanText(
-                        data.username,
-                        32
-                    );
-
-                if (!username) {
-                    wsSend(ws, {
-                        type:
-                            "error-message",
-                        message:
-                            "Compte introuvable."
-                    });
-
-                    return;
-                }
-
-                client = {
-                    id: makeId("session"),
-                    accountId: null,
-                    username:
-                        username
-                            .toLowerCase(),
-                    displayName:
-                        username,
-                    avatar:
-                        getAvatar(username),
-                    ws,
-                    voiceRoom: null
-                };
-
-            } else {
-
-                client = {
-                    id: makeId("session"),
-                    accountId:
-                        account.id,
-                    username:
-                        account.username,
-                    displayName:
-                        account.displayName,
-                    avatar:
-                        account.avatar,
-                    ws,
-                    voiceRoom: null
-                };
-            }
-
-            clients.set(
-                client.id,
-                client
-            );
-
-            wsSend(ws, {
-                type:
-                    "login-success",
-                success: true,
-                user: {
-                    id: client.id,
-                    accountId:
-                        client.accountId,
-                    username:
-                        client.username,
-                    displayName:
-                        client.displayName,
-                    avatar:
-                        client.avatar
-                }
-            });
-
-            wsSend(ws, {
-                type: "history",
-                channel: "general",
-                messages:
-                    chatDB.channels.general
-            });
-
-            broadcastPresence();
-
-            return;
-        }
-
-        /* =================================================
-           PROTECTION
-        ================================================= */
-
-        if (!client) {
-            wsSend(ws, {
-                type:
-                    "error-message",
-                message:
-                    "Connecte-toi d'abord."
-            });
-
-            return;
-        }
-
-        /* =================================================
-           MESSAGE
-        ================================================= */
-
-        if (type === "message") {
-
-            const channel =
-                cleanText(
-                    data.channel ||
-                    "general",
-                    100
-                ) || "general";
-
-            if (
-                !chatDB.channels[channel]
-            ) {
-                chatDB.channels[channel] =
-                    [];
-            }
-
-            const content =
-                String(
-                    data.content || ""
-                )
-                    .trim()
-                    .substring(
-                        0,
-                        4000
-                    );
-
-            if (!content) {
-                return;
-            }
-
-            const message = {
-                id: makeId("message"),
-                channel,
-                userId: client.id,
-                accountId:
-                    client.accountId,
-                username:
-                    client.username,
-                displayName:
-                    client.displayName,
-                avatar:
-                    client.avatar,
-                content,
-                time: Date.now(),
-                reactions: {}
-            };
-
-            chatDB.channels[channel]
-                .push(message);
-
-            if (
-                chatDB.channels[channel]
-                    .length > 500
-            ) {
-                chatDB.channels[channel] =
-                    chatDB.channels[
-                        channel
-                    ].slice(-500);
-            }
-
-            saveChat();
-
-            wsBroadcast({
-                type:
-                    "new-message",
-                message
-            });
-
-            return;
-        }
-
-        /* =================================================
-           HISTORY
-        ================================================= */
-
-        if (type === "history") {
-
-            const channel =
-                cleanText(
-                    data.channel ||
-                    "general",
-                    100
-                ) || "general";
-
-            if (
-                !chatDB.channels[channel]
-            ) {
-                chatDB.channels[channel] =
-                    [];
-            }
-
-            wsSend(ws, {
-                type: "history",
-                channel,
-                messages:
-                    chatDB.channels[
-                        channel
-                    ]
-            });
-
-            return;
-        }
-
-        /* =================================================
-           PRIVATE MESSAGE
-        ================================================= */
-
-        if (
-            type === "private-message"
-        ) {
-
-            const receiverId =
-                String(
-                    data.receiverId ||
-                    data.userId ||
-                    ""
-                );
-
-            const content =
-                String(
-                    data.content || ""
-                )
-                    .trim()
-                    .substring(
-                        0,
-                        4000
-                    );
-
-            if (
-                !receiverId ||
-                !content
-            ) {
-                return;
-            }
-
-            const receiver =
-                clients.get(
-                    receiverId
-                );
-
-            if (!receiver) {
-                wsSend(ws, {
-                    type:
-                        "error-message",
-                    message:
-                        "Cette personne n'est pas connectée."
-                });
-
-                return;
-            }
-
-            const key =
-                [
-                    client.id,
-                    receiver.id
-                ]
-                    .sort()
-                    .join("_");
-
-            if (
-                !chatDB.privateMessages[
-                    key
-                ]
-            ) {
-                chatDB.privateMessages[
-                    key
-                ] = [];
-            }
-
-            const message = {
-                id: makeId("dm"),
-                senderId:
-                    client.id,
-                receiverId:
-                    receiver.id,
-                senderName:
-                    client.username,
-                senderDisplayName:
-                    client.displayName,
-                content,
-                time: Date.now()
-            };
-
-            chatDB.privateMessages[
-                key
-            ].push(message);
-
-            saveChat();
-
-            wsSend(
-                receiver.ws,
-                {
-                    type:
-                        "private-message",
-                    message
-                }
-            );
-
-            wsSend(
-                ws,
-                {
-                    type:
-                        "private-message",
-                    message
-                }
-            );
-
-            return;
-        }
-
-        /* =================================================
-           PRIVATE HISTORY
-        ================================================= */
-
-        if (
-            type === "private-history"
-        ) {
-
-            const receiverId =
-                String(
-                    data.receiverId ||
-                    data.userId ||
-                    ""
-                );
-
-            if (!receiverId) {
-                return;
-            }
-
-            const key =
-                [
-                    client.id,
-                    receiverId
-                ]
-                    .sort()
-                    .join("_");
-
-            wsSend(ws, {
-                type:
-                    "private-history",
-                receiverId,
-                messages:
-                    chatDB.privateMessages[
-                        key
-                    ] || []
-            });
-
-            return;
-        }
-
-        /* =================================================
-           VOICE JOIN
-        ================================================= */
-
-        if (
-            type === "voice-join"
-        ) {
-
-            const room =
-                cleanText(
-                    data.room ||
-                    "general",
-                    100
-                );
-
-            if (!room) {
-                return;
-            }
-
-            if (client.voiceRoom) {
-                wsBroadcast({
-                    type:
-                        "voice-user-left",
-                    room:
-                        client.voiceRoom,
-                    userId:
-                        client.id
-                });
-            }
-
-            client.voiceRoom = room;
-
-            const peers = [];
-
-            for (
-                const other of clients.values()
-            ) {
-                if (
-                    other.id !==
-                        client.id &&
-                    other.voiceRoom ===
-                        room
-                ) {
-                    peers.push({
-                        id:
-                            other.id,
-                        username:
-                            other.username,
-                        displayName:
-                            other.displayName,
-                        avatar:
-                            other.avatar
-                    });
-                }
-            }
-
-            wsSend(ws, {
-                type:
-                    "voice-peers",
-                room,
-                peers
-            });
-
-            wsBroadcast(
-                {
-                    type:
-                        "voice-user-joined",
-                    room,
-                    user: {
-                        id:
-                            client.id,
-                        username:
-                            client.username,
-                        displayName:
-                            client.displayName,
-                        avatar:
-                            client.avatar
-                    }
-                },
-                ws
-            );
-
-            broadcastPresence();
-
-            return;
-        }
-
-        /* =================================================
-           VOICE LEAVE
-        ================================================= */
-
-        if (
-            type === "voice-leave"
-        ) {
-
-            if (!client.voiceRoom) {
-                return;
-            }
-
-            const room =
-                client.voiceRoom;
-
-            client.voiceRoom = null;
-
-            wsBroadcast({
-                type:
-                    "voice-user-left",
-                room,
-                userId:
-                    client.id
-            });
-
-            broadcastPresence();
-
-            return;
-        }
-
-        /* =================================================
-           WEBRTC OFFER
-        ================================================= */
-
-        if (
-            type === "webrtc-offer"
-        ) {
-
-            const targetId =
-                String(
-                    data.targetId ||
-                    data.userId ||
-                    ""
-                );
-
-            const target =
-                clients.get(
-                    targetId
-                );
-
-            if (!target) {
-                return;
-            }
-
-            if (
-                client.voiceRoom &&
-                target.voiceRoom &&
-                client.voiceRoom ===
-                    target.voiceRoom
-            ) {
-                wsSend(
-                    target.ws,
-                    {
-                        type:
-                            "webrtc-offer",
-                        senderId:
-                            client.id,
-                        senderName:
-                            client.displayName,
-                        offer:
-                            data.offer
-                    }
-                );
-            }
-
-            return;
-        }
-
-        /* =================================================
-           WEBRTC ANSWER
-        ================================================= */
-
-        if (
-            type === "webrtc-answer"
-        ) {
-
-            const targetId =
-                String(
-                    data.targetId ||
-                    data.userId ||
-                    ""
-                );
-
-            const target =
-                clients.get(
-                    targetId
-                );
-
-            if (!target) {
-                return;
-            }
-
-            wsSend(
-                target.ws,
-                {
-                    type:
-                        "webrtc-answer",
-                    senderId:
-                        client.id,
-                    senderName:
-                        client.displayName,
-                    answer:
-                        data.answer
-                }
-            );
-
-            return;
-        }
-
-        /* =================================================
-           WEBRTC ICE
-        ================================================= */
-
-        if (
-            type === "webrtc-ice"
-        ) {
-
-            const targetId =
-                String(
-                    data.targetId ||
-                    data.userId ||
-                    ""
-                );
-
-            const target =
-                clients.get(
-                    targetId
-                );
-
-            if (!target) {
-                return;
-            }
-
-            wsSend(
-                target.ws,
-                {
-                    type:
-                        "webrtc-ice",
-                    senderId:
-                        client.id,
-                    senderName:
-                        client.displayName,
-                    candidate:
-                        data.candidate
-                }
-            );
-
-            return;
-        }
-
-        /* =================================================
-           PING
-        ================================================= */
-
-        if (type === "ping") {
-            wsSend(ws, {
-                type: "pong"
-            });
-        }
-    });
-
-    /* =====================================================
-       DISCONNECT
-    ===================================================== */
-
-    ws.on("close", () => {
-
-        if (!client) {
-            return;
-        }
-
-        if (client.voiceRoom) {
-            wsBroadcast({
-                type:
-                    "voice-user-left",
-                room:
-                    client.voiceRoom,
-                userId:
-                    client.id
-            });
-        }
-
-        clients.delete(
-            client.id
-        );
-
-        broadcastPresence();
-    });
-
-    ws.on("error", error => {
-        console.error(
-            "Erreur WebSocket :",
-            error.message
-        );
-    });
+  res.json({
+    ok: true,
+    friends,
+    requests
+  });
 });
 
-/* =========================================================
-   HEARTBEAT
-========================================================= */
+app.post("/api/friends/request", (req, res) => {
+  const from = String(req.body.from || "");
+  const target = String(req.body.target || "").trim();
 
-const heartbeat =
-    setInterval(() => {
+  const sender = db.users.find(u => u.id === from);
+  const receiver = findUser(target);
 
-        for (
-            const ws of wss.clients
-        ) {
+  if (!sender || !receiver) {
+    return res.status(404).json({
+      ok: false,
+      error: "Utilisateur introuvable."
+    });
+  }
 
-            if (
-                ws.isAlive === false
-            ) {
-                ws.terminate();
-                continue;
-            }
+  if (sender.id === receiver.id) {
+    return res.status(400).json({
+      ok: false,
+      error: "Tu ne peux pas t'ajouter toi-même."
+    });
+  }
 
-            ws.isAlive = false;
+  if ((sender.friends || []).includes(receiver.id)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Cette personne est déjà dans tes amis."
+    });
+  }
 
-            try {
-                ws.ping();
-            } catch {
-                // connexion déjà fermée
-            }
-        }
+  const alreadyPending = db.friendRequests.some(
+    r =>
+      r.status === "pending" &&
+      ((r.from === sender.id && r.to === receiver.id) ||
+        (r.from === receiver.id && r.to === sender.id))
+  );
 
-    }, 30000);
+  if (alreadyPending) {
+    return res.status(400).json({
+      ok: false,
+      error: "Une demande est déjà en attente."
+    });
+  }
 
-wss.on("close", () => {
-    clearInterval(heartbeat);
+  const request = {
+    id: id("req_"),
+    from: sender.id,
+    to: receiver.id,
+    status: "pending",
+    createdAt: Date.now()
+  };
+
+  db.friendRequests.push(request);
+  saveDatabase();
+
+  io.to(`user:${receiver.id}`).emit("friend_request", {
+    request,
+    from: cleanUser(sender)
+  });
+
+  res.json({
+    ok: true,
+    request
+  });
 });
 
-/* =========================================================
-   SHUTDOWN
-========================================================= */
+app.post("/api/friends/respond", (req, res) => {
+  const userId = String(req.body.userId || "");
+  const requestId = String(req.body.requestId || "");
+  const action = String(req.body.action || "");
 
-function shutdown() {
+  const request = db.friendRequests.find(
+    r => r.id === requestId && r.to === userId && r.status === "pending"
+  );
 
-    console.log(
-        "Arrêt de NovaChat..."
-    );
-
-    saveAccounts();
-    saveChat();
-
-    for (
-        const client of clients.values()
-    ) {
-        try {
-            client.ws.close();
-        } catch {
-            // rien
-        }
-    }
-
-    server.close(() => {
-        process.exit(0);
+  if (!request) {
+    return res.status(404).json({
+      ok: false,
+      error: "Demande introuvable."
     });
-}
+  }
 
-process.on(
-    "SIGINT",
-    shutdown
-);
+  if (action === "accept") {
+    const user = db.users.find(u => u.id === userId);
+    const sender = db.users.find(u => u.id === request.from);
 
-process.on(
-    "SIGTERM",
-    shutdown
-);
-
-/* =========================================================
-   START
-========================================================= */
-
-server.listen(
-    PORT,
-    "0.0.0.0",
-    () => {
-
-        console.log("");
-        console.log(
-            "======================================"
-        );
-        console.log(
-            "          NOVACHAT SERVEUR"
-        );
-        console.log(
-            "======================================"
-        );
-        console.log(
-            "Port : " + PORT
-        );
-        console.log(
-            "WebSocket : OK"
-        );
-        console.log(
-            "Comptes : OK"
-        );
-        console.log(
-            "Database : OK"
-        );
-        console.log(
-            "======================================"
-        );
-        console.log("");
+    if (!user || !sender) {
+      return res.status(404).json({
+        ok: false,
+        error: "Utilisateur introuvable."
+      });
     }
-);
+
+    user.friends = Array.isArray(user.friends) ? user.friends : [];
+    sender.friends = Array.isArray(sender.friends) ? sender.friends : [];
+
+    if (!user.friends.includes(sender.id)) user.friends.push(sender.id);
+    if (!sender.friends.includes(user.id)) sender.friends.push(user.id);
+
+    request.status = "accepted";
+
+    saveDatabase();
+
+    io.to(`user:${sender.id}`).emit("friend_accepted", {
+      user: cleanUser(user)
+    });
+
+    io.to(`user:${user.id}`).emit("friend_accepted", {
+      user: cleanUser(sender)
+    });
+  } else if (action === "decline") {
+    request.status = "declined";
+    saveDatabase();
+  } else {
+    return res.status(400).json({
+      ok: false,
+      error: "Action invalide."
+    });
+  }
+
+  res.json({
+    ok: true
+  });
+});
+
+app.get("/api/servers/:userId", (req, res) => {
+  const servers = db.servers.filter(s =>
+    s.members.includes(req.params.userId)
+  );
+
+  res.json({
+    ok: true,
+    servers
+  });
+});
+
+app.post("/api/servers", (req, res) => {
+  const ownerId = String(req.body.ownerId || "");
+  const name = String(req.body.name || "").trim();
+  const icon = String(req.body.icon || "");
+
+  const owner = db.users.find(u => u.id === ownerId);
+
+  if (!owner) {
+    return res.status(404).json({
+      ok: false,
+      error: "Propriétaire introuvable."
+    });
+  }
+
+  if (!name) {
+    return res.status(400).json({
+      ok: false,
+      error: "Le nom du serveur est obligatoire."
+    });
+  }
+
+  const serverData = createDefaultServer(ownerId, name);
+  serverData.icon = icon;
+
+  db.servers.push(serverData);
+  saveDatabase();
+
+  res.json({
+    ok: true,
+    server: serverData
+  });
+});
+
+app.get("/api/servers/detail/:serverId", (req, res) => {
+  const serverData = db.servers.find(s => s.id === req.params.serverId);
+
+  if (!serverData) {
+    return res.status(404).json({
+      ok: false,
+      error: "Serveur introuvable."
+    });
+  }
+
+  const members = serverData.members
+    .map(memberId => db.users.find(u => u.id === memberId))
+    .filter(Boolean)
+    .map(cleanUser);
+
+  res.json({
+    ok: true,
+    server: serverData,
+    members
+  });
+});
+
+app.post("/api/servers/:serverId/join", (req, res) => {
+  const serverData = db.servers.find(s => s.id === req.params.serverId);
+  const userId = String(req.body.userId || "");
+
+  if (!serverData) {
+    return res.status(404).json({
+      ok: false,
+      error: "Serveur introuvable."
+    });
+  }
+
+  if (!db.users.some(u => u.id === userId)) {
+    return res.status(404).json({
+      ok: false,
+      error: "Utilisateur introuvable."
+    });
+  }
+
+  if (!serverData.members.includes(userId)) {
+    serverData.members.push(userId);
+    saveDatabase();
+  }
+
+  res.json({
+    ok: true,
+    server: serverData
+  });
+});
+
+app.patch("/api/servers/:serverId", (req, res) => {
+  const serverData = db.servers.find(s => s.id === req.params.serverId);
+  const userId = String(req.body.userId || "");
+
+  if (!serverData) {
+    return res.status(404).json({
+      ok: false,
+      error: "Serveur introuvable."
+    });
+  }
+
+  if (serverData.ownerId !== userId) {
+    return res.status(403).json({
+      ok: false,
+      error: "Seul le propriétaire peut modifier ce serveur."
+    });
+  }
+
+  if (typeof req.body.name === "string" && req.body.name.trim()) {
+    serverData.name = req.body.name.trim();
+  }
+
+  if (typeof req.body.icon === "string") {
+    serverData.icon = req.body.icon;
+  }
+
+  saveDatabase();
+
+  io.to(`server:${serverData.id}`).emit("server_updated", serverData);
+
+  res.json({
+    ok: true,
+    server: serverData
+  });
+});
+
+app.post("/api/servers/:serverId/channels", (req, res) => {
+  const serverData = db.servers.find(s => s.id === req.params.serverId);
+  const userId = String(req.body.userId || "");
+  const name = String(req.body.name || "").trim();
+  const type = req.body.type === "voice" ? "voice" : "text";
+
+  if (!serverData) {
+    return res.status(404).json({
+      ok: false,
+      error: "Serveur introuvable."
+    });
+  }
+
+  if (serverData.ownerId !== userId) {
+    return res.status(403).json({
+      ok: false,
+      error: "Permission refusée."
+    });
+  }
+
+  if (!name) {
+    return res.status(400).json({
+      ok: false,
+      error: "Nom du salon obligatoire."
+    });
+  }
+
+  const channel = {
+    id: id("chn_"),
+    name,
+    type,
+    position: serverData.channels.length
+  };
+
+  serverData.channels.push(channel);
+
+  saveDatabase();
+
+  res.json({
+    ok: true,
+    channel
+  });
+});
+
+app.delete("/api/servers/:serverId/channels/:channelId", (req, res) => {
+  const serverData = db.servers.find(s => s.id === req.params.serverId);
+  const userId = String(req.body.userId || "");
+
+  if (!serverData) {
+    return res.status(404).json({
+      ok: false,
+      error: "Serveur introuvable."
+    });
+  }
+
+  if (serverData.ownerId !== userId) {
+    return res.status(403).json({
+      ok: false,
+      error: "Permission refusée."
+    });
+  }
+
+  serverData.channels = serverData.channels.filter(
+    c => c.id !== req.params.channelId
+  );
+
+  saveDatabase();
+
+  res.json({
+    ok: true
+  });
+});
+
+app.post("/api/servers/:serverId/invites", (req, res) => {
+  const serverData = db.servers.find(s => s.id === req.params.serverId);
+  const userId = String(req.body.userId || "");
+
+  if (!serverData) {
+    return res.status(404).json({
+      ok: false,
+      error: "Serveur introuvable."
+    });
+  }
+
+  if (!serverData.members.includes(userId)) {
+    return res.status(403).json({
+      ok: false,
+      error: "Tu n'es pas membre de ce serveur."
+    });
+  }
+
+  const code = crypto.randomBytes(5).toString("hex");
+
+  const invite = {
+    code,
+    serverId: serverData.id,
+    createdBy: userId,
+    createdAt: Date.now()
+  };
+
+  serverData.invites.push(invite);
+  saveDatabase();
+
+  res.json({
+    ok: true,
+    invite
+  });
+});
+
+app.post("/api/invites/:code/join", (req, res) => {
+  const userId = String(req.body.userId || "");
+
+  let serverData = null;
+
+  for (const currentServer of db.servers) {
+    if (currentServer.invites.some(i => i.code === req.params.code)) {
+      serverData = currentServer;
+      break;
+    }
+  }
+
+  if (!serverData) {
+    return res.status(404).json({
+      ok: false,
+      error: "Invitation invalide."
+    });
+  }
+
+  if (!serverData.members.includes(userId)) {
+    serverData.members.push(userId);
+  }
+
+  saveDatabase();
+
+  res.json({
+    ok: true,
+    server: serverData
+  });
+});
+
+app.get("/api/messages/:userId/:friendId", (req, res) => {
+  const messages = db.messages.filter(
+    message =>
+      (message.from === req.params.userId &&
+        message.to === req.params.friendId) ||
+      (message.from === req.params.friendId &&
+        message.to === req.params.userId)
+  );
+
+  res.json({
+    ok: true,
+    messages
+  });
+});
+
+app.post("/api/messages", (req, res) => {
+  const from = String(req.body.from || "");
+  const to = String(req.body.to || "");
+  const content = String(req.body.content || "").trim();
+
+  if (!from || !to || !content) {
+    return res.status(400).json({
+      ok: false,
+      error: "Message invalide."
+    });
+  }
+
+  const sender = db.users.find(u => u.id === from);
+  const receiver = db.users.find(u => u.id === to);
+
+  if (!sender || !receiver) {
+    return res.status(404).json({
+      ok: false,
+      error: "Utilisateur introuvable."
+    });
+  }
+
+  const message = {
+    id: id("msg_"),
+    from,
+    to,
+    content,
+    createdAt: Date.now()
+  };
+
+  db.messages.push(message);
+  saveDatabase();
+
+  io.to(`user:${to}`).emit("private_message", message);
+
+  res.json({
+    ok: true,
+    message
+  });
+});
+
+app.delete("/api/servers/:serverId", (req, res) => {
+  const userId = String(req.body.userId || "");
+
+  const index = db.servers.findIndex(
+    s => s.id === req.params.serverId
+  );
+
+  if (index === -1) {
+    return res.status(404).json({
+      ok: false,
+      error: "Serveur introuvable."
+    });
+  }
+
+  const serverData = db.servers[index];
+
+  if (serverData.ownerId !== userId) {
+    return res.status(403).json({
+      ok: false,
+      error: "Seul le propriétaire peut supprimer le serveur."
+    });
+  }
+
+  db.servers.splice(index, 1);
+  saveDatabase();
+
+  io.to(`server:${serverData.id}`).emit("server_deleted", {
+    serverId: serverData.id
+  });
+
+  res.json({
+    ok: true
+  });
+});
+
+io.on("connection", socket => {
+  socket.on("identify", userId => {
+    if (!userId) return;
+
+    socket.userId = userId;
+    socket.join(`user:${userId}`);
+  });
+
+  socket.on("join_server", serverId => {
+    if (serverId) {
+      socket.join(`server:${serverId}`);
+    }
+  });
+
+  socket.on("leave_server", serverId => {
+    if (serverId) {
+      socket.leave(`server:${serverId}`);
+    }
+  });
+
+  socket.on("join_voice", data => {
+    const serverId = String(data?.serverId || "");
+    const channelId = String(data?.channelId || "");
+
+    if (!serverId || !channelId || !socket.userId) return;
+
+    socket.join(`voice:${channelId}`);
+
+    socket.voiceChannelId = channelId;
+
+    socket.to(`voice:${channelId}`).emit("voice_user_joined", {
+      userId: socket.userId,
+      socketId: socket.id
+    });
+  });
+
+  socket.on("leave_voice", () => {
+    if (!socket.voiceChannelId) return;
+
+    const room = `voice:${socket.voiceChannelId}`;
+
+    socket.to(room).emit("voice_user_left", {
+      userId: socket.userId,
+      socketId: socket.id
+    });
+
+    socket.leave(room);
+    socket.voiceChannelId = null;
+  });
+
+  socket.on("voice_offer", data => {
+    if (!data?.targetSocketId) return;
+
+    io.to(data.targetSocketId).emit("voice_offer", {
+      fromSocketId: socket.id,
+      offer: data.offer
+    });
+  });
+
+  socket.on("voice_answer", data => {
+    if (!data?.targetSocketId) return;
+
+    io.to(data.targetSocketId).emit("voice_answer", {
+      fromSocketId: socket.id,
+      answer: data.answer
+    });
+  });
+
+  socket.on("voice_ice_candidate", data => {
+    if (!data?.targetSocketId) return;
+
+    io.to(data.targetSocketId).emit("voice_ice_candidate", {
+      fromSocketId: socket.id,
+      candidate: data.candidate
+    });
+  });
+
+  socket.on("private_call_invite", data => {
+    const target = String(data?.targetUserId || "");
+
+    if (!target || !socket.userId) return;
+
+    io.to(`user:${target}`).emit("private_call_incoming", {
+      fromUserId: socket.userId,
+      fromSocketId: socket.id,
+      callId: data.callId,
+      callType: data.callType || "audio"
+    });
+  });
+
+  socket.on("private_call_accept", data => {
+    if (!data?.targetSocketId) return;
+
+    io.to(data.targetSocketId).emit("private_call_accepted", {
+      fromSocketId: socket.id,
+      callId: data.callId
+    });
+  });
+
+  socket.on("private_call_reject", data => {
+    if (!data?.targetSocketId) return;
+
+    io.to(data.targetSocketId).emit("private_call_rejected", {
+      callId: data.callId
+    });
+  });
+
+  socket.on("private_call_end", data => {
+    if (!data?.targetSocketId) return;
+
+    io.to(data.targetSocketId).emit("private_call_ended", {
+      callId: data.callId
+    });
+  });
+
+  socket.on("disconnect", () => {
+    if (socket.voiceChannelId) {
+      socket.to(`voice:${socket.voiceChannelId}`).emit("voice_user_left", {
+        userId: socket.userId,
+        socketId: socket.id
+      });
+    }
+  });
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`NovaChat lancé sur le port ${PORT}`);
+});
