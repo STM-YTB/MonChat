@@ -1,4291 +1,2852 @@
+```html
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<title>NovaChat</title>
-
-<script src="/socket.io/socket.io.js"></script>
-
-<style>
-
-:root {
-  --bg: #1e1f22;
-  --bg-dark: #111214;
-  --sidebar: #2b2d31;
-  --sidebar-light: #313338;
-  --hover: #3f4147;
-  --active: #404249;
-  --text: #f2f3f5;
-  --muted: #949ba4;
-  --accent: #5865f2;
-  --success: #23a559;
-  --danger: #ed4245;
-  --border: #202225;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  height: 100vh;
-  overflow: hidden;
-  background: var(--bg);
-  color: var(--text);
-  font-family: Arial, Helvetica, sans-serif;
-}
-
-button,
-input,
-textarea {
-  font: inherit;
-}
-
-button {
-  border: 0;
-  cursor: pointer;
-}
-
-.hidden {
-  display: none !important;
-}
-
-/* =========================================================
-   LOGIN
-========================================================= */
-
-#loginScreen {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  background:
-    radial-gradient(
-      circle at 50% 0%,
-      #42458a 0,
-      transparent 45%
-    ),
-    #111214;
-}
-
-.auth-box {
-  width: 430px;
-  padding: 34px;
-
-  background: #313338;
-  border-radius: 8px;
-
-  box-shadow:
-    0 25px 80px rgba(0,0,0,.55);
-}
-
-.auth-box h1 {
-  margin: 0 0 8px;
-  text-align: center;
-}
-
-.auth-subtitle {
-  color: var(--muted);
-  text-align: center;
-  margin-bottom: 24px;
-}
-
-.auth-box label {
-  display: block;
-  margin: 15px 0 7px;
-
-  color: #b5bac1;
-
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.auth-box input {
-  width: 100%;
-
-  padding: 12px;
-
-  border: 1px solid #1e1f22;
-  border-radius: 4px;
-
-  outline: none;
-
-  background: #1e1f22;
-  color: white;
-}
-
-.auth-box input:focus {
-  border-color: var(--accent);
-}
-
-.auth-button {
-  width: 100%;
-
-  margin-top: 20px;
-  padding: 13px;
-
-  border-radius: 4px;
-
-  background: var(--accent);
-  color: white;
-
-  font-weight: 700;
-}
-
-.auth-button:hover {
-  background: #4752c4;
-}
-
-.auth-switch {
-  margin-top: 18px;
-
-  color: var(--muted);
-
-  text-align: center;
-  font-size: 13px;
-}
-
-.auth-switch button {
-  background: transparent;
-  color: #00a8fc;
-}
-
-.form-error {
-  margin-top: 10px;
-  color: #fa777c;
-  font-size: 13px;
-}
-
-/* =========================================================
-   APP
-========================================================= */
-
-#app {
-  height: 100vh;
-
-  display: flex;
-}
-
-/* =========================================================
-   SERVER BAR
-========================================================= */
-
-.server-bar {
-  width: 72px;
-  flex-shrink: 0;
-
-  padding: 12px 10px;
-
-  overflow-y: auto;
-
-  background: #1e1f22;
-}
-
-.server-icon {
-  width: 52px;
-  height: 52px;
-
-  margin-bottom: 8px;
-
-  border-radius: 50%;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  overflow: hidden;
-
-  background: #313338;
-  color: white;
-
-  font-size: 17px;
-  font-weight: bold;
-
-  transition:
-    border-radius .15s,
-    background .15s;
-}
-
-.server-icon:hover {
-  border-radius: 16px;
-  background: var(--accent);
-}
-
-.server-icon.active {
-  border-radius: 16px;
-  background: var(--accent);
-}
-
-.server-icon img {
-  width: 100%;
-  height: 100%;
-
-  object-fit: cover;
-}
-
-.server-separator {
-  height: 2px;
-
-  margin: 7px 5px 12px;
-
-  background: #35373c;
-}
-
-/* =========================================================
-   CHANNEL SIDEBAR
-========================================================= */
-
-.channel-sidebar {
-  width: 250px;
-  flex-shrink: 0;
-
-  display: flex;
-  flex-direction: column;
-
-  background: var(--sidebar);
-}
-
-.server-header {
-  height: 56px;
-
-  padding: 0 14px;
-
-  display: flex;
-  align-items: center;
-
-  border-bottom: 1px solid var(--border);
-
-  font-weight: bold;
-}
-
-.server-header-text {
-  min-width: 0;
-  flex: 1;
-}
-
-.server-header-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.server-header-code {
-  margin-top: 2px;
-
-  color: var(--muted);
-
-  font-size: 10px;
-}
-
-.channel-scroll {
-  flex: 1;
-
-  padding: 10px;
-
-  overflow-y: auto;
-}
-
-.category {
-  margin: 17px 5px 7px;
-
-  display: flex;
-  align-items: center;
-
-  color: var(--muted);
-
-  font-size: 11px;
-  font-weight: bold;
-
-  text-transform: uppercase;
-}
-
-.category-title {
-  flex: 1;
-}
-
-.category button {
-  width: 22px;
-  height: 22px;
-
-  border-radius: 4px;
-
-  background: transparent;
-  color: var(--muted);
-}
-
-.category button:hover {
-  background: var(--hover);
-  color: white;
-}
-
-.channel {
-  width: 100%;
-
-  padding: 8px;
-
-  margin-bottom: 2px;
-
-  display: flex;
-  align-items: center;
-
-  gap: 8px;
-
-  border-radius: 4px;
-
-  background: transparent;
-  color: #b5bac1;
-
-  text-align: left;
-}
-
-.channel:hover,
-.channel.active {
-  background: var(--hover);
-  color: white;
-}
-
-.channel-icon {
-  width: 20px;
-
-  color: var(--muted);
-
-  text-align: center;
-
-  font-size: 17px;
-}
-
-.channel-name {
-  flex: 1;
-}
-
-.voice-users {
-  padding: 2px 0 5px 31px;
-}
-
-.voice-user {
-  padding: 5px 4px;
-
-  display: flex;
-  align-items: center;
-
-  gap: 8px;
-
-  border-radius: 4px;
-
-  color: #b5bac1;
-
-  font-size: 12px;
-}
-
-.voice-user:hover {
-  background: var(--hover);
-  color: white;
-}
-
-.voice-user-avatar {
-  width: 26px;
-  height: 26px;
-
-  flex-shrink: 0;
-
-  border-radius: 50%;
-
-  overflow: hidden;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  background: var(--accent);
-
-  color: white;
-
-  font-size: 11px;
-  font-weight: bold;
-}
-
-.voice-user-avatar img {
-  width: 100%;
-  height: 100%;
-
-  object-fit: cover;
-}
-
-.voice-user-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* =========================================================
-   USER BOX
-========================================================= */
-
-.user-box {
-  height: 60px;
-
-  padding: 8px;
-
-  display: flex;
-  align-items: center;
-
-  gap: 9px;
-
-  background: #232428;
-}
-
-.user-avatar {
-  width: 34px;
-  height: 34px;
-
-  flex-shrink: 0;
-
-  border-radius: 50%;
-
-  overflow: hidden;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  background: var(--accent);
-
-  font-weight: bold;
-}
-
-.user-avatar img {
-  width: 100%;
-  height: 100%;
-
-  object-fit: cover;
-}
-
-.user-info {
-  flex: 1;
-
-  min-width: 0;
-}
-
-.user-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-
-  font-weight: bold;
-}
-
-.user-status {
-  color: var(--success);
-  font-size: 11px;
-}
-
-.user-settings-button {
-  background: transparent;
-  color: #b5bac1;
-
-  font-size: 18px;
-}
-
-/* =========================================================
-   HOME / FRIEND SIDEBAR
-========================================================= */
-
-.home-sidebar {
-  width: 250px;
-  flex-shrink: 0;
-
-  display: flex;
-  flex-direction: column;
-
-  background: var(--sidebar);
-}
-
-.home-header {
-  height: 56px;
-
-  padding: 0 15px;
-
-  display: flex;
-  align-items: center;
-
-  border-bottom: 1px solid var(--border);
-
-  font-weight: bold;
-}
-
-.home-scroll {
-  flex: 1;
-
-  padding: 10px;
-
-  overflow-y: auto;
-}
-
-.home-button {
-  width: 100%;
-
-  margin-bottom: 4px;
-  padding: 10px;
-
-  border-radius: 4px;
-
-  background: transparent;
-  color: #b5bac1;
-
-  text-align: left;
-}
-
-.home-button:hover,
-.home-button.active {
-  background: var(--hover);
-  color: white;
-}
-
-.friend-item {
-  width: 100%;
-
-  padding: 8px;
-
-  margin-bottom: 2px;
-
-  display: flex;
-  align-items: center;
-
-  gap: 9px;
-
-  border-radius: 4px;
-
-  cursor: pointer;
-}
-
-.friend-item:hover,
-.friend-item.active {
-  background: var(--hover);
-}
-
-.friend-avatar {
-  width: 34px;
-  height: 34px;
-
-  flex-shrink: 0;
-
-  border-radius: 50%;
-
-  overflow: hidden;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  background: var(--accent);
-
-  font-size: 12px;
-  font-weight: bold;
-}
-
-.friend-avatar img {
-  width: 100%;
-  height: 100%;
-
-  object-fit: cover;
-}
-
-.friend-info {
-  min-width: 0;
-}
-
-.friend-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.friend-status {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-/* =========================================================
-   MAIN CHAT
-========================================================= */
-
-.main {
-  flex: 1;
-
-  min-width: 0;
-
-  display: flex;
-  flex-direction: column;
-}
-
-.topbar {
-  height: 56px;
-
-  padding: 0 18px;
-
-  display: flex;
-  align-items: center;
-
-  gap: 10px;
-
-  background: var(--sidebar-light);
-
-  border-bottom: 1px solid var(--border);
-}
-
-.topbar-icon {
-  color: var(--muted);
-  font-size: 20px;
-}
-
-.topbar-title {
-  font-weight: bold;
-}
-
-.topbar-description {
-  margin-top: 2px;
-
-  color: var(--muted);
-
-  font-size: 11px;
-}
-
-.topbar-spacer {
-  flex: 1;
-}
-
-.topbar-button {
-  width: 36px;
-  height: 36px;
-
-  border-radius: 4px;
-
-  background: transparent;
-  color: #b5bac1;
-
-  font-size: 18px;
-}
-
-.topbar-button:hover {
-  background: var(--hover);
-  color: white;
-}
-
-.messages {
-  flex: 1;
-
-  padding: 20px;
-
-  overflow-y: auto;
-}
-
-.message {
-  display: flex;
-
-  gap: 11px;
-
-  margin-bottom: 17px;
-}
-
-.message-avatar {
-  width: 40px;
-  height: 40px;
-
-  flex-shrink: 0;
-
-  overflow: hidden;
-
-  border-radius: 50%;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  background: var(--accent);
-
-  font-weight: bold;
-}
-
-.message-avatar img {
-  width: 100%;
-  height: 100%;
-
-  object-fit: cover;
-}
-
-.message-content-wrapper {
-  min-width: 0;
-}
-
-.message-header {
-  display: flex;
-  align-items: baseline;
-
-  gap: 7px;
-}
-
-.message-author {
-  font-weight: bold;
-}
-
-.message-time {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.message-text {
-  margin-top: 3px;
-
-  color: #dbdee1;
-
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.empty {
-  height: 100%;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  color: var(--muted);
-
-  text-align: center;
-}
-
-.composer {
-  padding: 0 20px 20px;
-}
-
-.composer-inner {
-  display: flex;
-  align-items: flex-end;
-
-  padding: 7px;
-
-  background: #383a40;
-
-  border-radius: 8px;
-}
-
-.composer textarea {
-  flex: 1;
-
-  max-height: 140px;
-
-  padding: 9px;
-
-  border: 0;
-  outline: 0;
-
-  resize: none;
-
-  background: transparent;
-  color: white;
-}
-
-.composer-button {
-  width: 40px;
-  height: 40px;
-
-  background: transparent;
-  color: #b5bac1;
-
-  font-size: 19px;
-}
-
-.composer-button:hover {
-  color: white;
-}
-
-/* =========================================================
-   RIGHT MEMBERS
-========================================================= */
-
-.member-sidebar {
-  width: 220px;
-  flex-shrink: 0;
-
-  padding: 15px 10px;
-
-  overflow-y: auto;
-
-  background: var(--sidebar);
-
-  border-left: 1px solid var(--border);
-}
-
-.member-title {
-  margin: 8px;
-
-  color: var(--muted);
-
-  font-size: 11px;
-  font-weight: bold;
-
-  text-transform: uppercase;
-}
-
-/* =========================================================
-   MODAL
-========================================================= */
-
-.modal {
-  position: fixed;
-  inset: 0;
-
-  z-index: 500;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  background: rgba(0,0,0,.72);
-}
-
-.modal-box {
-  width: 480px;
-  max-height: 85vh;
-
-  padding: 25px;
-
-  overflow-y: auto;
-
-  background: #313338;
-
-  border-radius: 8px;
-
-  box-shadow:
-    0 25px 80px rgba(0,0,0,.55);
-}
-
-.modal-box h2 {
-  margin-top: 0;
-}
-
-.modal-box label {
-  display: block;
-
-  margin: 14px 0 6px;
-
-  color: #b5bac1;
-
-  font-size: 11px;
-  font-weight: bold;
-
-  text-transform: uppercase;
-}
-
-.modal-input {
-  width: 100%;
-
-  padding: 11px;
-
-  border: 0;
-  border-radius: 4px;
-
-  outline: 0;
-
-  background: #1e1f22;
-  color: white;
-}
-
-.modal-actions {
-  margin-top: 20px;
-
-  display: flex;
-  justify-content: flex-end;
-
-  gap: 8px;
-}
-
-.primary {
-  padding: 10px 16px;
-
-  border-radius: 4px;
-
-  background: var(--accent);
-  color: white;
-}
-
-.secondary {
-  padding: 10px 16px;
-
-  border-radius: 4px;
-
-  background: #4e5058;
-  color: white;
-}
-
-.danger {
-  padding: 10px 16px;
-
-  border-radius: 4px;
-
-  background: var(--danger);
-  color: white;
-}
-
-.profile-preview {
-  width: 90px;
-  height: 90px;
-
-  margin: 0 auto 15px;
-
-  overflow: hidden;
-
-  border-radius: 50%;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  background: var(--accent);
-
-  font-size: 28px;
-  font-weight: bold;
-}
-
-.profile-preview img {
-  width: 100%;
-  height: 100%;
-
-  object-fit: cover;
-}
-
-.file-input {
-  width: 100%;
-
-  padding: 10px;
-
-  border-radius: 5px;
-
-  background: #1e1f22;
-  color: #b5bac1;
-}
-
-/* =========================================================
-   TOAST
-========================================================= */
-
-#toast {
-  position: fixed;
-
-  right: 20px;
-  bottom: 20px;
-
-  z-index: 1000;
-
-  padding: 13px 18px;
-
-  border-radius: 6px;
-
-  background: #111214;
-  color: white;
-
-  box-shadow:
-    0 10px 30px rgba(0,0,0,.4);
-}
-
-/* =========================================================
-   RESPONSIVE
-========================================================= */
-
-@media(max-width:1000px) {
-  .member-sidebar {
-    display: none;
-  }
-}
-
-@media(max-width:700px) {
-  .server-bar {
-    width: 62px;
-  }
-
-  .server-icon {
-    width: 44px;
-    height: 44px;
-  }
-
-  .channel-sidebar,
-  .home-sidebar {
-    width: 210px;
-  }
-}
-
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NovaChat</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg: #1e1f22;
+      --bg-dark: #111214;
+      --bg-darker: #0d0e10;
+      --panel: #2b2d31;
+      --panel-light: #313338;
+      --hover: #35373c;
+      --active: #404249;
+      --text: #f2f3f5;
+      --muted: #b5bac1;
+      --accent: #5865f2;
+      --danger: #ed4245;
+      --success: #23a559;
+      --border: rgba(255,255,255,.06);
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* =========================
+       AUTH
+    ========================= */
+
+    #authScreen {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background:
+        radial-gradient(circle at 20% 20%, #313780 0, transparent 30%),
+        radial-gradient(circle at 80% 80%, #3d2457 0, transparent 30%),
+        #111214;
+    }
+
+    .auth-card {
+      width: 430px;
+      max-width: calc(100vw - 30px);
+      background: #2b2d31;
+      border-radius: 8px;
+      padding: 32px;
+      box-shadow: 0 12px 40px rgba(0,0,0,.45);
+    }
+
+    .auth-logo {
+      text-align: center;
+      font-size: 30px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .auth-subtitle {
+      text-align: center;
+      color: var(--muted);
+      margin-bottom: 25px;
+    }
+
+    .auth-tabs {
+      display: flex;
+      margin-bottom: 20px;
+      background: #1e1f22;
+      border-radius: 6px;
+      padding: 4px;
+    }
+
+    .auth-tab {
+      flex: 1;
+      border: 0;
+      color: var(--muted);
+      background: transparent;
+      padding: 10px;
+      border-radius: 4px;
+    }
+
+    .auth-tab.active {
+      background: var(--accent);
+      color: white;
+    }
+
+    .field {
+      margin-bottom: 15px;
+    }
+
+    .field label {
+      display: block;
+      font-size: 12px;
+      font-weight: bold;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 7px;
+    }
+
+    .field input {
+      width: 100%;
+      border: 0;
+      outline: 0;
+      background: #1e1f22;
+      color: white;
+      border-radius: 5px;
+      padding: 12px;
+    }
+
+    .primary-btn {
+      width: 100%;
+      border: 0;
+      background: var(--accent);
+      color: white;
+      padding: 12px;
+      border-radius: 5px;
+      font-weight: bold;
+      margin-top: 5px;
+    }
+
+    .primary-btn:hover {
+      filter: brightness(1.1);
+    }
+
+    #authError {
+      color: #ff7b7b;
+      min-height: 20px;
+      margin: 8px 0;
+      font-size: 14px;
+    }
+
+    /* =========================
+       APP
+    ========================= */
+
+    #app {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+    }
+
+    /* SERVERS */
+
+    #serverBar {
+      width: 72px;
+      background: var(--bg-darker);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 10px 0;
+      gap: 8px;
+      overflow-y: auto;
+    }
+
+    .server-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      border: 0;
+      background: #313338;
+      color: white;
+      font-weight: bold;
+      font-size: 18px;
+      overflow: hidden;
+      transition: .15s;
+    }
+
+    .server-icon:hover,
+    .server-icon.active {
+      border-radius: 15px;
+      background: var(--accent);
+    }
+
+    .server-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .server-add {
+      background: #1e1f22;
+      color: #23a559;
+      font-size: 25px;
+    }
+
+    /* SIDEBAR */
+
+    #sidebar {
+      width: 250px;
+      background: #2b2d31;
+      display: flex;
+      flex-direction: column;
+      min-width: 250px;
+    }
+
+    #sidebarHeader {
+      height: 52px;
+      display: flex;
+      align-items: center;
+      padding: 0 15px;
+      border-bottom: 1px solid var(--border);
+      font-weight: bold;
+      box-shadow: 0 1px 2px rgba(0,0,0,.2);
+    }
+
+    #sidebarContent {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 8px;
+    }
+
+    .section-title {
+      color: #949ba4;
+      font-size: 11px;
+      font-weight: bold;
+      text-transform: uppercase;
+      padding: 8px;
+    }
+
+    .friend {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px;
+      border-radius: 5px;
+      cursor: pointer;
+      color: var(--muted);
+    }
+
+    .friend:hover {
+      background: var(--hover);
+      color: white;
+    }
+
+    .friend.active {
+      background: var(--active);
+      color: white;
+    }
+
+    .avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: #5865f2;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      flex-shrink: 0;
+      font-weight: bold;
+    }
+
+    .avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .friend-info {
+      min-width: 0;
+    }
+
+    .friend-name {
+      font-weight: bold;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .friend-username {
+      font-size: 12px;
+      color: #949ba4;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .channel {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      color: #949ba4;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+
+    .channel:hover {
+      background: var(--hover);
+      color: white;
+    }
+
+    .channel.active {
+      background: var(--active);
+      color: white;
+    }
+
+    .channel-icon {
+      font-size: 19px;
+      width: 22px;
+      text-align: center;
+    }
+
+    #userPanel {
+      min-height: 60px;
+      background: #232428;
+      padding: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #currentUserInfo {
+      flex: 1;
+      min-width: 0;
+    }
+
+    #currentDisplayName {
+      font-weight: bold;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #currentUsername {
+      color: #949ba4;
+      font-size: 12px;
+    }
+
+    .small-btn {
+      border: 0;
+      background: transparent;
+      color: #b5bac1;
+      font-size: 18px;
+      padding: 6px;
+      border-radius: 5px;
+    }
+
+    .small-btn:hover {
+      background: var(--hover);
+      color: white;
+    }
+
+    /* MAIN */
+
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    #topbar {
+      height: 52px;
+      min-height: 52px;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--border);
+      background: #313338;
+      box-shadow: 0 1px 2px rgba(0,0,0,.2);
+    }
+
+    #topbarTitle {
+      font-weight: bold;
+    }
+
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      background: #313338;
+    }
+
+    .welcome {
+      max-width: 800px;
+      margin: 60px auto;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .welcome h1 {
+      color: white;
+    }
+
+    .message {
+      display: flex;
+      gap: 12px;
+      padding: 8px 0;
+    }
+
+    .message:hover {
+      background: rgba(0,0,0,.08);
+    }
+
+    .message-content {
+      min-width: 0;
+    }
+
+    .message-header {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+    }
+
+    .message-name {
+      font-weight: bold;
+    }
+
+    .message-date {
+      color: #949ba4;
+      font-size: 11px;
+    }
+
+    .message-text {
+      color: #dbdee1;
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin-top: 2px;
+    }
+
+    #composer {
+      padding: 12px 20px 20px;
+      background: #313338;
+    }
+
+    #composerBox {
+      background: #383a40;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+    }
+
+    #messageInput {
+      flex: 1;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: white;
+      padding: 13px;
+      resize: none;
+    }
+
+    #sendBtn {
+      border: 0;
+      background: transparent;
+      color: #b5bac1;
+      font-size: 20px;
+      padding: 8px;
+    }
+
+    #sendBtn:hover {
+      color: white;
+    }
+
+    /* EMPTY */
+
+    .empty-state {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      color: #949ba4;
+      text-align: center;
+      padding: 30px;
+    }
+
+    .empty-state h1 {
+      color: white;
+    }
+
+    /* MODAL */
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.65);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+    }
+
+    .modal-card {
+      width: 430px;
+      max-width: calc(100vw - 30px);
+      background: #313338;
+      border-radius: 8px;
+      padding: 24px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.5);
+    }
+
+    .modal-card h2 {
+      margin-top: 0;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .secondary-btn {
+      border: 0;
+      background: #4e5058;
+      color: white;
+      padding: 10px 15px;
+      border-radius: 5px;
+    }
+
+    .danger-btn {
+      border: 0;
+      background: var(--danger);
+      color: white;
+      padding: 10px 15px;
+      border-radius: 5px;
+    }
+
+    /* PROFILE */
+
+    .profile-avatar {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+
+    .profile-avatar .avatar {
+      width: 90px;
+      height: 90px;
+      font-size: 30px;
+    }
+
+    /* VOICE */
+
+    #voicePanel {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      width: 340px;
+      max-width: calc(100vw - 40px);
+      background: #1e1f22;
+      border: 1px solid #111214;
+      border-radius: 10px;
+      padding: 14px;
+      z-index: 50;
+      box-shadow: 0 15px 40px rgba(0,0,0,.45);
+    }
+
+    #voiceTitle {
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+
+    #voiceUsers {
+      max-height: 250px;
+      overflow-y: auto;
+    }
+
+    .voice-user {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px;
+      border-radius: 5px;
+    }
+
+    .voice-user:hover {
+      background: var(--hover);
+    }
+
+    .voice-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .voice-actions button {
+      flex: 1;
+      border: 0;
+      padding: 9px;
+      border-radius: 5px;
+      background: #4e5058;
+      color: white;
+    }
+
+    .voice-actions button.active {
+      background: var(--accent);
+    }
+
+    /* MOBILE */
+
+    @media (max-width: 800px) {
+      #serverBar {
+        width: 58px;
+      }
+
+      #sidebar {
+        width: 210px;
+        min-width: 210px;
+      }
+
+      .server-icon {
+        width: 42px;
+        height: 42px;
+      }
+    }
+  </style>
 </head>
 
 <body>
 
-<!-- ======================================================
-     LOGIN
-====================================================== -->
+  <!-- =========================
+       AUTHENTIFICATION
+  ========================== -->
 
-<div id="loginScreen">
+  <section id="authScreen">
 
-  <div class="auth-box">
+    <div class="auth-card">
 
-    <h1 id="authTitle">
-      Bienvenue sur NovaChat
-    </h1>
+      <div class="auth-logo">NovaChat</div>
 
-    <div
-      class="auth-subtitle"
-      id="authSubtitle"
-    >
-      Crée ton compte pour commencer.
-    </div>
+      <div class="auth-subtitle">
+        Ton espace de discussion.
+      </div>
 
-    <div id="registerFields">
+      <div class="auth-tabs">
+        <button
+          id="loginTab"
+          class="auth-tab active"
+          onclick="showAuth('login')"
+        >
+          Connexion
+        </button>
 
-      <label>
-        Nom d'utilisateur
-      </label>
+        <button
+          id="registerTab"
+          class="auth-tab"
+          onclick="showAuth('register')"
+        >
+          Créer un compte
+        </button>
+      </div>
 
-      <input
-        id="usernameInput"
-        maxlength="24"
-        placeholder="ex : Storm"
-        autocomplete="username"
+      <!-- CONNEXION -->
+
+      <form id="loginForm">
+
+        <div class="field">
+          <label>Email ou nom d'utilisateur</label>
+
+          <input
+            id="loginInput"
+            type="text"
+            autocomplete="username"
+            placeholder="Email ou nom d'utilisateur"
+            required
+          >
+        </div>
+
+        <div class="field">
+          <label>Mot de passe</label>
+
+          <input
+            id="loginPassword"
+            type="password"
+            autocomplete="current-password"
+            placeholder="Mot de passe"
+            required
+          >
+        </div>
+
+        <div id="loginError"></div>
+
+        <button
+          class="primary-btn"
+          type="submit"
+        >
+          Se connecter
+        </button>
+
+      </form>
+
+      <!-- INSCRIPTION -->
+
+      <form
+        id="registerForm"
+        class="hidden"
       >
 
-      <label>
-        Email
-      </label>
+        <div class="field">
+          <label>Email</label>
 
-      <input
-        id="emailInput"
-        type="email"
-        placeholder="ton@email.com"
-        autocomplete="email"
-      >
+          <input
+            id="registerEmail"
+            type="email"
+            autocomplete="email"
+            placeholder="ton@email.com"
+            required
+          >
+        </div>
+
+        <div class="field">
+          <label>Nom d'utilisateur</label>
+
+          <input
+            id="registerUsername"
+            type="text"
+            autocomplete="username"
+            placeholder="exemple123"
+            maxlength="32"
+            required
+          >
+        </div>
+
+        <div class="field">
+          <label>Nom d'affichage</label>
+
+          <input
+            id="registerDisplayName"
+            type="text"
+            placeholder="Ton nom"
+            maxlength="50"
+          >
+        </div>
+
+        <div class="field">
+          <label>Mot de passe</label>
+
+          <input
+            id="registerPassword"
+            type="password"
+            autocomplete="new-password"
+            placeholder="Minimum 6 caractères"
+            minlength="6"
+            required
+          >
+        </div>
+
+        <div id="registerError"></div>
+
+        <button
+          class="primary-btn"
+          type="submit"
+        >
+          Créer mon compte
+        </button>
+
+      </form>
 
     </div>
 
-    <label>
-      Mot de passe
-    </label>
+  </section>
 
-    <input
-      id="passwordInput"
-      type="password"
-      placeholder="Mot de passe"
-      autocomplete="new-password"
-    >
 
-    <button
-      class="auth-button"
-      id="authButton"
-    >
-      Créer mon compte
-    </button>
+  <!-- =========================
+       APPLICATION
+  ========================== -->
 
-    <div
-      id="authError"
-      class="form-error hidden"
-    ></div>
+  <section
+    id="app"
+    class="hidden"
+  >
 
-    <div class="auth-switch">
+    <!-- SERVEURS -->
 
-      <span id="switchText">
-        Tu as déjà un compte ?
-      </span>
+    <aside id="serverBar">
 
-      <button id="switchAuth">
-        Se connecter
+      <button
+        id="homeButton"
+        class="server-icon active"
+        title="Messages privés"
+        onclick="showHome()"
+      >
+        N
+      </button>
+
+      <div id="serverList"></div>
+
+      <button
+        class="server-icon server-add"
+        title="Créer un serveur"
+        onclick="openCreateServer()"
+      >
+        +
+      </button>
+
+    </aside>
+
+
+    <!-- SIDEBAR -->
+
+    <aside id="sidebar">
+
+      <div id="sidebarHeader">
+        <span id="sidebarTitle">Messages privés</span>
+      </div>
+
+      <div id="sidebarContent">
+
+        <div class="section-title">
+          Amis
+        </div>
+
+        <button
+          class="secondary-btn"
+          style="width:100%; margin-bottom:10px;"
+          onclick="openAddFriend()"
+        >
+          + Ajouter un ami
+        </button>
+
+        <div id="friendList"></div>
+
+      </div>
+
+      <div id="userPanel">
+
+        <div
+          id="currentAvatar"
+          class="avatar"
+        >
+          N
+        </div>
+
+        <div id="currentUserInfo">
+
+          <div id="currentDisplayName">
+            NovaChat
+          </div>
+
+          <div id="currentUsername">
+            @user
+          </div>
+
+        </div>
+
+        <button
+          class="small-btn"
+          title="Paramètres"
+          onclick="openSettings()"
+        >
+          ⚙
+        </button>
+
+        <button
+          class="small-btn"
+          title="Déconnexion"
+          onclick="logout()"
+        >
+          ⎋
+        </button>
+
+      </div>
+
+    </aside>
+
+
+    <!-- CONTENU PRINCIPAL -->
+
+    <main id="main">
+
+      <header id="topbar">
+        <span id="topbarTitle">Messages privés</span>
+      </header>
+
+      <div
+        id="messages"
+        class="hidden"
+      ></div>
+
+      <div
+        id="emptyState"
+        class="empty-state"
+      >
+
+        <div>
+
+          <h1>Bienvenue sur NovaChat</h1>
+
+          <p>
+            Sélectionne un ami pour commencer une conversation.
+          </p>
+
+        </div>
+
+      </div>
+
+      <div
+        id="composer"
+        class="hidden"
+      >
+
+        <div id="composerBox">
+
+          <input
+            id="messageInput"
+            type="text"
+            placeholder="Envoyer un message..."
+            autocomplete="off"
+          >
+
+          <button
+            id="sendBtn"
+            title="Envoyer"
+          >
+            ➤
+          </button>
+
+        </div>
+
+      </div>
+
+    </main>
+
+  </section>
+
+
+  <!-- =========================
+       MODAL AJOUT AMI
+  ========================== -->
+
+  <div
+    id="friendModal"
+    class="modal hidden"
+  >
+
+    <div class="modal-card">
+
+      <h2>Ajouter un ami</h2>
+
+      <div class="field">
+
+        <label>Nom d'utilisateur</label>
+
+        <input
+          id="friendUsername"
+          type="text"
+          placeholder="exemple123"
+        >
+
+      </div>
+
+      <div id="friendError"></div>
+
+      <div class="modal-actions">
+
+        <button
+          class="secondary-btn"
+          onclick="closeModal('friendModal')"
+        >
+          Annuler
+        </button>
+
+        <button
+          class="primary-btn"
+          style="width:auto; margin:0;"
+          onclick="addFriend()"
+        >
+          Ajouter
+        </button>
+
+      </div>
+
+    </div>
+
+  </div>
+
+
+  <!-- =========================
+       MODAL CREATION SERVEUR
+  ========================== -->
+
+  <div
+    id="serverModal"
+    class="modal hidden"
+  >
+
+    <div class="modal-card">
+
+      <h2>Créer un serveur</h2>
+
+      <div class="field">
+
+        <label>Nom du serveur</label>
+
+        <input
+          id="serverName"
+          type="text"
+          maxlength="80"
+          placeholder="Mon serveur"
+        >
+
+      </div>
+
+      <div class="field">
+
+        <label>Icône du serveur</label>
+
+        <input
+          id="serverIcon"
+          type="file"
+          accept="image/*"
+        >
+
+      </div>
+
+      <div id="serverError"></div>
+
+      <div class="modal-actions">
+
+        <button
+          class="secondary-btn"
+          onclick="closeModal('serverModal')"
+        >
+          Annuler
+        </button>
+
+        <button
+          class="primary-btn"
+          style="width:auto; margin:0;"
+          onclick="createServer()"
+        >
+          Créer
+        </button>
+
+      </div>
+
+    </div>
+
+  </div>
+
+
+  <!-- =========================
+       MODAL PARAMÈTRES
+  ========================== -->
+
+  <div
+    id="settingsModal"
+    class="modal hidden"
+  >
+
+    <div class="modal-card">
+
+      <h2>Paramètres du compte</h2>
+
+      <div class="profile-avatar">
+
+        <div
+          id="settingsAvatar"
+          class="avatar"
+        >
+          N
+        </div>
+
+      </div>
+
+      <div class="field">
+
+        <label>Photo de profil</label>
+
+        <input
+          id="avatarFile"
+          type="file"
+          accept="image/*"
+        >
+
+      </div>
+
+      <div class="field">
+
+        <label>Nom d'affichage</label>
+
+        <input
+          id="settingsDisplayName"
+          type="text"
+          maxlength="50"
+        >
+
+      </div>
+
+      <div class="field">
+
+        <label>Nom d'utilisateur</label>
+
+        <input
+          id="settingsUsername"
+          type="text"
+          maxlength="32"
+        >
+
+      </div>
+
+      <div id="settingsError"></div>
+
+      <div class="modal-actions">
+
+        <button
+          class="secondary-btn"
+          onclick="closeModal('settingsModal')"
+        >
+          Annuler
+        </button>
+
+        <button
+          class="primary-btn"
+          style="width:auto; margin:0;"
+          onclick="saveSettings()"
+        >
+          Enregistrer
+        </button>
+
+      </div>
+
+    </div>
+
+  </div>
+
+
+  <!-- =========================
+       PANNEAU VOCAL
+  ========================== -->
+
+  <div
+    id="voicePanel"
+    class="hidden"
+  >
+
+    <div id="voiceTitle">
+      🔊 Général
+    </div>
+
+    <div id="voiceUsers"></div>
+
+    <div class="voice-actions">
+
+      <button
+        id="muteButton"
+        onclick="toggleMute()"
+      >
+        🎙️ Micro
+      </button>
+
+      <button
+        onclick="leaveVoice()"
+      >
+        📞 Quitter
       </button>
 
     </div>
 
   </div>
 
-</div>
 
-<!-- ======================================================
-     APP
-====================================================== -->
-
-<div
-  id="app"
-  class="hidden"
->
-
-  <!-- SERVER BAR -->
-
-  <aside class="server-bar">
-
-    <button
-      class="server-icon active"
-      id="homeButton"
-      title="Messages privés"
-    >
-      N
-    </button>
-
-    <div class="server-separator"></div>
-
-    <div id="serverList"></div>
-
-    <button
-      class="server-icon"
-      id="createServerButton"
-      title="Créer un serveur"
-    >
-      +
-    </button>
-
-    <button
-      class="server-icon"
-      id="joinServerButton"
-      title="Rejoindre un serveur"
-    >
-      🔗
-    </button>
-
-  </aside>
-
-  <!-- HOME SIDEBAR -->
-
-  <aside
-    class="home-sidebar"
-    id="homeSidebar"
-  >
-
-    <div class="home-header">
-      NovaChat
-    </div>
-
-    <div class="home-scroll">
-
-      <button
-        class="home-button active"
-        id="friendsButton"
-      >
-        👥 Amis
-      </button>
-
-      <button
-        class="home-button"
-        id="addFriendButton"
-      >
-        ➕ Ajouter un ami
-      </button>
-
-      <div class="category">
-        Messages privés
-      </div>
-
-      <div id="friendList"></div>
-
-    </div>
-
-    <div class="user-box">
-
-      <div
-        class="user-avatar"
-        id="myAvatar"
-      >
-        ?
-      </div>
-
-      <div class="user-info">
-
-        <div
-          class="user-name"
-          id="myName"
-        >
-          Utilisateur
-        </div>
-
-        <div class="user-status">
-          ● En ligne
-        </div>
-
-      </div>
-
-      <button
-        class="user-settings-button"
-        id="settingsButton"
-        title="Paramètres"
-      >
-        ⚙
-      </button>
-
-    </div>
-
-  </aside>
-
-  <!-- SERVER CHANNEL SIDEBAR -->
-
-  <aside
-    class="channel-sidebar hidden"
-    id="channelSidebar"
-  >
-
-    <div class="server-header">
-
-      <div class="server-header-text">
-
-        <div
-          class="server-header-name"
-          id="serverHeaderName"
-        >
-          Serveur
-        </div>
-
-        <div
-          class="server-header-code"
-          id="serverHeaderCode"
-        ></div>
-
-      </div>
-
-      <button
-        class="topbar-button"
-        id="serverSettingsButton"
-        title="Paramètres du serveur"
-      >
-        ⚙
-      </button>
-
-    </div>
-
-    <div
-      class="channel-scroll"
-      id="channelList"
-    ></div>
-
-    <div class="user-box">
-
-      <div
-        class="user-avatar"
-        id="serverMyAvatar"
-      >
-        ?
-      </div>
-
-      <div class="user-info">
-
-        <div
-          class="user-name"
-          id="serverMyName"
-        >
-          Utilisateur
-        </div>
-
-        <div class="user-status">
-          ● En ligne
-        </div>
-
-      </div>
-
-      <button
-        class="user-settings-button"
-        id="serverSettingsProfile"
-        title="Paramètres"
-      >
-        ⚙
-      </button>
-
-    </div>
-
-  </aside>
-
-  <!-- MAIN -->
-
-  <main class="main">
-
-    <header class="topbar">
-
-      <div
-        class="topbar-icon"
-        id="topbarIcon"
-      >
-        👥
-      </div>
-
-      <div>
-
-        <div
-          class="topbar-title"
-          id="chatTitle"
-        >
-          Amis
-        </div>
-
-        <div
-          class="topbar-description"
-          id="chatDescription"
-        >
-          Tes amis et tes conversations.
-        </div>
-
-      </div>
-
-      <div class="topbar-spacer"></div>
-
-      <button
-        class="topbar-button hidden"
-        id="callButton"
-        title="Appeler"
-      >
-        📞
-      </button>
-
-      <button
-        class="topbar-button hidden"
-        id="videoButton"
-        title="Appel vidéo"
-      >
-        📹
-      </button>
-
-    </header>
-
-    <div
-      class="messages"
-      id="messages"
-    >
-
-      <div class="empty">
-
-        <div>
-
-          <h2>
-            Bienvenue sur NovaChat 👋
-          </h2>
-
-          <p>
-            Sélectionne un ami ou un serveur.
-          </p>
-
-        </div>
-
-      </div>
-
-    </div>
-
-    <div
-      class="composer hidden"
-      id="composer"
-    >
-
-      <div class="composer-inner">
-
-        <button
-          class="composer-button"
-          id="emojiButton"
-          title="Emoji"
-        >
-          🙂
-        </button>
-
-        <textarea
-          id="messageInput"
-          rows="1"
-          placeholder="Envoyer un message..."
-        ></textarea>
-
-        <button
-          class="composer-button"
-          id="sendButton"
-          title="Envoyer"
-        >
-          ➤
-        </button>
-
-      </div>
-
-    </div>
-
-  </main>
-
-  <!-- MEMBERS -->
-
-  <aside class="member-sidebar">
-
-    <div class="member-title">
-      Membres en ligne
-    </div>
-
-    <div id="onlineMembers"></div>
-
-    <div class="member-title">
-      Hors ligne
-    </div>
-
-    <div id="offlineMembers"></div>
-
-  </aside>
-
-</div>
-
-<!-- ======================================================
-     MODAL
-====================================================== -->
-
-<div
-  class="modal hidden"
-  id="modal"
->
-
-  <div
-    class="modal-box"
-    id="modalContent"
-  ></div>
-
-</div>
-
-<div
-  id="toast"
-  class="hidden"
-></div>
-
-<script>
-
-const socket = io();
-
-let token =
-  localStorage.getItem(
-    "novachat_token"
-  );
-
-let currentUser = null;
-let currentFriend = null;
-
-let currentServer = null;
-let currentChannel = null;
-
-let authMode = "register";
-
-const $ = id =>
-  document.getElementById(id);
-
-const loginScreen =
-  $("loginScreen");
-
-const app =
-  $("app");
-
-const authTitle =
-  $("authTitle");
-
-const authSubtitle =
-  $("authSubtitle");
-
-const registerFields =
-  $("registerFields");
-
-const usernameInput =
-  $("usernameInput");
-
-const emailInput =
-  $("emailInput");
-
-const passwordInput =
-  $("passwordInput");
-
-const authButton =
-  $("authButton");
-
-const authError =
-  $("authError");
-
-const switchAuth =
-  $("switchAuth");
-
-const switchText =
-  $("switchText");
-
-const homeSidebar =
-  $("homeSidebar");
-
-const channelSidebar =
-  $("channelSidebar");
-
-const serverList =
-  $("serverList");
-
-const channelList =
-  $("channelList");
-
-const friendList =
-  $("friendList");
-
-const messages =
-  $("messages");
-
-const composer =
-  $("composer");
-
-const messageInput =
-  $("messageInput");
-
-const sendButton =
-  $("sendButton");
-
-const chatTitle =
-  $("chatTitle");
-
-const chatDescription =
-  $("chatDescription");
-
-const topbarIcon =
-  $("topbarIcon");
-
-const modal =
-  $("modal");
-
-const modalContent =
-  $("modalContent");
-
-const toast =
-  $("toast");
-
-/* ========================================================
-   HELPERS
-======================================================== */
-
-function escapeHtml(value) {
-
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function escapeAttribute(value) {
-  return escapeHtml(value)
-    .replaceAll("\n", "");
-}
-
-function initials(name) {
-
-  return String(name || "?")
-    .charAt(0)
-    .toUpperCase();
-}
-
-function avatarHtml(
-  user,
-  className
-) {
-
-  if (user?.avatar) {
-
-    return `
-      <div class="${className}">
-        <img
-          src="${user.avatar}"
-          alt=""
-        >
-      </div>
-    `;
-
-  }
-
-  return `
-    <div class="${className}">
-      ${escapeHtml(
-        initials(
-          user?.displayName
-        )
-      )}
-    </div>
-  `;
-}
-
-function showToast(text) {
-
-  toast.textContent =
-    text;
-
-  toast.classList.remove(
-    "hidden"
-  );
-
-  clearTimeout(
-    showToast.timer
-  );
-
-  showToast.timer =
-    setTimeout(() => {
-      toast.classList.add(
-        "hidden"
-      );
-    }, 3000);
-}
-
-function openModal(html) {
-
-  modalContent.innerHTML =
-    html;
-
-  modal.classList.remove(
-    "hidden"
-  );
-}
-
-function closeModal() {
-
-  modal.classList.add(
-    "hidden"
-  );
-}
-
-modal.addEventListener(
-  "click",
-  event => {
-
-    if (
-      event.target === modal
-    ) {
-      closeModal();
+  <script src="/socket.io/socket.io.js"></script>
+
+  <script>
+    let socket = null;
+    let currentUser = null;
+    let currentFriend = null;
+    let currentServer = null;
+    let currentChannel = null;
+
+    let friends = [];
+    let servers = [];
+
+    let localStream = null;
+    let peerConnections = {};
+
+    /*
+    ================================================
+    UTILITAIRES
+    ================================================
+    */
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text == null ? "" : String(text);
+      return div.innerHTML;
     }
 
-  }
-);
+    function initials(name) {
+      const value = String(name || "N").trim();
 
-async function api(
-  url,
-  options = {}
-) {
-
-  const headers = {
-    "Content-Type":
-      "application/json",
-    ...(options.headers || {})
-  };
-
-  if (token) {
-    headers.Authorization =
-      "Bearer " + token;
-  }
-
-  const response =
-    await fetch(
-      url,
-      {
-        ...options,
-        headers
+      if (!value) {
+        return "N";
       }
-    );
 
-  let data = {};
+      return value
+        .split(/\s+/)
+        .slice(0, 2)
+        .map(part => part.charAt(0).toUpperCase())
+        .join("");
+    }
 
-  try {
-    data =
-      await response.json();
-  } catch {
-    data = {};
-  }
+    function avatarHtml(user, sizeClass = "") {
+      if (user && user.avatar) {
+        return `
+          <div class="avatar ${sizeClass}">
+            <img src="${escapeHtml(user.avatar)}">
+          </div>
+        `;
+      }
 
-  if (!response.ok) {
+      return `
+        <div class="avatar ${sizeClass}">
+          ${escapeHtml(initials(user ? user.displayName : "N"))}
+        </div>
+      `;
+    }
 
-    throw new Error(
-      data.error ||
-      "Une erreur est survenue."
-    );
-  }
+    function showError(elementId, message) {
+      const element = document.getElementById(elementId);
 
-  return data;
-}
+      if (element) {
+        element.textContent = message || "";
+        element.style.color = "#ff7b7b";
+        element.style.marginBottom = "10px";
+      }
+    }
 
-/* ========================================================
-   AUTH
-======================================================== */
+    function clearError(elementId) {
+      const element = document.getElementById(elementId);
 
-function updateAuthUI() {
+      if (element) {
+        element.textContent = "";
+      }
+    }
 
-  authError.classList.add(
-    "hidden"
-  );
-
-  if (
-    authMode === "register"
-  ) {
-
-    authTitle.textContent =
-      "Créer ton compte";
-
-    authSubtitle.textContent =
-      "Rejoins NovaChat.";
-
-    registerFields.classList.remove(
-      "hidden"
-    );
-
-    authButton.textContent =
-      "Créer mon compte";
-
-    switchText.textContent =
-      "Tu as déjà un compte ?";
-
-    switchAuth.textContent =
-      "Se connecter";
-
-  } else {
-
-    authTitle.textContent =
-      "Bienvenue sur NovaChat";
-
-    authSubtitle.textContent =
-      "Connecte-toi à ton compte.";
-
-    registerFields.classList.add(
-      "hidden"
-    );
-
-    authButton.textContent =
-      "Se connecter";
-
-    switchText.textContent =
-      "Pas encore de compte ?";
-
-    switchAuth.textContent =
-      "Créer un compte";
-  }
-}
-
-switchAuth.addEventListener(
-  "click",
-  () => {
-
-    authMode =
-      authMode === "register"
-        ? "login"
-        : "register";
-
-    updateAuthUI();
-  }
-);
-
-authButton.addEventListener(
-  "click",
-  async () => {
-
-    authError.classList.add(
-      "hidden"
-    );
-
-    try {
+    async function api(url, options = {}) {
+      const response = await fetch(url, options);
 
       let data;
 
-      if (
-        authMode === "register"
-      ) {
-
-        const username =
-          usernameInput.value.trim();
-
-        const email =
-          emailInput.value.trim();
-
-        const password =
-          passwordInput.value;
-
-        if (!username) {
-          throw new Error(
-            "Entre un nom d'utilisateur."
-          );
-        }
-
-        if (!email) {
-          throw new Error(
-            "Entre ton email."
-          );
-        }
-
-        if (
-          password.length < 6
-        ) {
-          throw new Error(
-            "Le mot de passe doit contenir au moins 6 caractères."
-          );
-        }
-
-        data =
-          await api(
-            "/api/register",
-            {
-              method: "POST",
-              body:
-                JSON.stringify({
-                  username,
-                  email,
-                  password
-                })
-            }
-          );
-
-      } else {
-
-        data =
-          await api(
-            "/api/login",
-            {
-              method: "POST",
-              body:
-                JSON.stringify({
-                  email:
-                    emailInput.value.trim(),
-                  password:
-                    passwordInput.value
-                })
-            }
-          );
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error("Réponse invalide du serveur.");
       }
 
-      token =
-        data.token;
+      if (!response.ok || data.ok === false) {
+        throw new Error(
+          data.error || "Une erreur est survenue."
+        );
+      }
 
+      return data;
+    }
+
+    function saveCurrentUser() {
       localStorage.setItem(
-        "novachat_token",
-        token
-      );
-
-      currentUser =
-        data.user;
-
-      enterApp();
-
-    } catch (error) {
-
-      authError.textContent =
-        error.message;
-
-      authError.classList.remove(
-        "hidden"
-      );
-    }
-  }
-);
-
-/* ========================================================
-   ENTER APP
-======================================================== */
-
-async function enterApp() {
-
-  loginScreen.classList.add(
-    "hidden"
-  );
-
-  app.classList.remove(
-    "hidden"
-  );
-
-  updateMyUserUI();
-
-  socket.emit(
-    "authenticate",
-    token
-  );
-
-  await loadFriends();
-  await loadServers();
-
-  showHome();
-}
-
-async function loadCurrentUser() {
-
-  try {
-
-    const data =
-      await api("/api/me");
-
-    currentUser =
-      data.user;
-
-    enterApp();
-
-  } catch {
-
-    localStorage.removeItem(
-      "novachat_token"
-    );
-
-    token = null;
-
-    loginScreen.classList.remove(
-      "hidden"
-    );
-
-    app.classList.add(
-      "hidden"
-    );
-  }
-}
-
-function updateMyUserUI() {
-
-  if (!currentUser)
-    return;
-
-  const avatar =
-    currentUser.avatar;
-
-  $("myAvatar").innerHTML =
-    avatar
-      ? `<img src="${avatar}" alt="">`
-      : escapeHtml(
-          initials(
-            currentUser.displayName
-          )
-        );
-
-  $("serverMyAvatar").innerHTML =
-    avatar
-      ? `<img src="${avatar}" alt="">`
-      : escapeHtml(
-          initials(
-            currentUser.displayName
-          )
-        );
-
-  $("myName").textContent =
-    currentUser.displayName;
-
-  $("serverMyName").textContent =
-    currentUser.displayName;
-}
-
-/* ========================================================
-   HOME
-======================================================== */
-
-function showHome() {
-
-  currentServer = null;
-  currentChannel = null;
-  currentFriend = null;
-
-  homeSidebar.classList.remove(
-    "hidden"
-  );
-
-  channelSidebar.classList.add(
-    "hidden"
-  );
-
-  chatTitle.textContent =
-    "Amis";
-
-  chatDescription.textContent =
-    "Tes amis et tes conversations.";
-
-  topbarIcon.textContent =
-    "👥";
-
-  composer.classList.add(
-    "hidden"
-  );
-
-  $("callButton").classList.add(
-    "hidden"
-  );
-
-  $("videoButton").classList.add(
-    "hidden"
-  );
-
-  messages.innerHTML = `
-    <div class="empty">
-      <div>
-        <h2>Bienvenue sur NovaChat 👋</h2>
-        <p>
-          Sélectionne un ami pour commencer une conversation.
-        </p>
-      </div>
-    </div>
-  `;
-
-  document
-    .querySelectorAll(
-      ".server-icon"
-    )
-    .forEach(
-      item =>
-        item.classList.remove(
-          "active"
-        )
-    );
-
-  $("homeButton")
-    .classList.add(
-      "active"
-    );
-}
-
-$("homeButton")
-  .addEventListener(
-    "click",
-    showHome
-  );
-
-$("friendsButton")
-  .addEventListener(
-    "click",
-    showHome
-  );
-
-/* ========================================================
-   FRIENDS
-======================================================== */
-
-async function loadFriends() {
-
-  try {
-
-    const data =
-      await api(
-        "/api/friends"
-      );
-
-    renderFriends(
-      data.friends
-    );
-
-    renderMembers(
-      data.friends
-    );
-
-  } catch (error) {
-
-    console.error(error);
-  }
-}
-
-function renderFriends(
-  friends
-) {
-
-  friendList.innerHTML = "";
-
-  if (!friends.length) {
-
-    friendList.innerHTML = `
-      <div style="
-        padding:10px;
-        color:#949ba4;
-        font-size:12px;
-      ">
-        Aucun ami pour le moment.
-      </div>
-    `;
-
-    return;
-  }
-
-  for (
-    const friend of friends
-  ) {
-
-    const item =
-      document.createElement(
-        "div"
-      );
-
-    item.className =
-      "friend-item";
-
-    item.innerHTML = `
-      ${avatarHtml(
-        friend,
-        "friend-avatar"
-      )}
-
-      <div class="friend-info">
-
-        <div class="friend-name">
-          ${escapeHtml(
-            friend.displayName
-          )}
-        </div>
-
-        <div class="friend-status">
-          ${
-            friend.online
-              ? "En ligne"
-              : "Hors ligne"
-          }
-        </div>
-
-      </div>
-    `;
-
-    item.addEventListener(
-      "click",
-      () =>
-        openFriend(
-          friend
-        )
-    );
-
-    friendList.appendChild(
-      item
-    );
-  }
-}
-
-$("addFriendButton")
-  .addEventListener(
-    "click",
-    () => {
-
-      openModal(`
-        <h2>Ajouter un ami</h2>
-
-        <p style="color:#949ba4">
-          Entre le nom d'utilisateur de ton ami.
-        </p>
-
-        <label>
-          Nom d'utilisateur
-        </label>
-
-        <input
-          id="friendUsername"
-          class="modal-input"
-          placeholder="ex : Storm"
-        >
-
-        <div class="modal-actions">
-
-          <button
-            class="secondary"
-            onclick="closeModal()"
-          >
-            Annuler
-          </button>
-
-          <button
-            class="primary"
-            id="sendFriendRequest"
-          >
-            Ajouter
-          </button>
-
-        </div>
-      `);
-
-      $("sendFriendRequest")
-        .addEventListener(
-          "click",
-          async () => {
-
-            try {
-
-              await api(
-                "/api/friends/add",
-                {
-                  method: "POST",
-                  body:
-                    JSON.stringify({
-                      username:
-                        $(
-                          "friendUsername"
-                        )
-                          .value
-                          .trim()
-                    })
-                }
-              );
-
-              closeModal();
-
-              showToast(
-                "Ami ajouté !"
-              );
-
-              await loadFriends();
-
-            } catch (error) {
-
-              showToast(
-                error.message
-              );
-            }
-          }
-        );
-    }
-  );
-
-/* ========================================================
-   PRIVATE MESSAGE
-======================================================== */
-
-async function openFriend(
-  friend
-) {
-
-  currentFriend =
-    friend;
-
-  currentServer = null;
-  currentChannel = null;
-
-  homeSidebar.classList.remove(
-    "hidden"
-  );
-
-  channelSidebar.classList.add(
-    "hidden"
-  );
-
-  chatTitle.textContent =
-    friend.displayName;
-
-  chatDescription.textContent =
-    friend.online
-      ? "En ligne"
-      : "Hors ligne";
-
-  topbarIcon.textContent =
-    "💬";
-
-  composer.classList.remove(
-    "hidden"
-  );
-
-  $("callButton")
-    .classList.remove(
-      "hidden"
-    );
-
-  $("videoButton")
-    .classList.remove(
-      "hidden"
-    );
-
-  messages.innerHTML = `
-    <div class="empty">
-      Chargement...
-    </div>
-  `;
-
-  try {
-
-    const data =
-      await api(
-        "/api/dm/" +
-        encodeURIComponent(
-          friend.id
-        )
-      );
-
-    messages.innerHTML = "";
-
-    if (!data.messages.length) {
-
-      messages.innerHTML = `
-        <div class="empty">
-          <div>
-            <h2>
-              Commence la conversation
-            </h2>
-
-            <p>
-              Envoie un message à
-              ${escapeHtml(
-                friend.displayName
-              )}.
-            </p>
-          </div>
-        </div>
-      `;
-
-      return;
-    }
-
-    for (
-      const message of
-      data.messages
-    ) {
-      renderMessage(
-        message
+        "novachat_user",
+        JSON.stringify(currentUser)
       );
     }
 
-    scrollMessages();
+    function loadCurrentUser() {
+      try {
+        const saved = localStorage.getItem("novachat_user");
 
-  } catch (error) {
-
-    showToast(
-      error.message
-    );
-  }
-}
-
-function renderMessage(
-  message
-) {
-
-  let sender;
-
-  if (
-    message.senderId ===
-    currentUser.id
-  ) {
-    sender =
-      currentUser;
-  } else {
-    sender =
-      currentFriend;
-  }
-
-  const element =
-    document.createElement(
-      "div"
-    );
-
-  element.className =
-    "message";
-
-  const date =
-    new Date(
-      message.createdAt
-    );
-
-  element.innerHTML = `
-    ${avatarHtml(
-      sender,
-      "message-avatar"
-    )}
-
-    <div class="message-content-wrapper">
-
-      <div class="message-header">
-
-        <span class="message-author">
-          ${escapeHtml(
-            sender.displayName
-          )}
-        </span>
-
-        <span class="message-time">
-          ${date.toLocaleTimeString(
-            [],
-            {
-              hour:
-                "2-digit",
-              minute:
-                "2-digit"
-            }
-          )}
-        </span>
-
-      </div>
-
-      <div class="message-text">
-        ${escapeHtml(
-          message.content
-        )}
-      </div>
-
-    </div>
-  `;
-
-  messages.appendChild(
-    element
-  );
-}
-
-async function sendMessage() {
-
-  const content =
-    messageInput.value.trim();
-
-  if (!content)
-    return;
-
-  try {
-
-    if (
-      currentFriend
-    ) {
-
-      await api(
-        "/api/dm/" +
-        currentFriend.id,
-        {
-          method: "POST",
-          body:
-            JSON.stringify({
-              content
-            })
+        if (!saved) {
+          return null;
         }
-      );
 
-    } else if (
-      currentServer &&
-      currentChannel &&
-      currentChannel.type ===
-        "text"
-    ) {
-
-      await api(
-        "/api/servers/" +
-        currentServer.id +
-        "/messages/" +
-        currentChannel.id,
-        {
-          method: "POST",
-          body:
-            JSON.stringify({
-              content
-            })
-        }
-      );
-    }
-
-    messageInput.value = "";
-
-  } catch (error) {
-
-    showToast(
-      error.message
-    );
-  }
-}
-
-sendButton
-  .addEventListener(
-    "click",
-    sendMessage
-  );
-
-messageInput
-  .addEventListener(
-    "keydown",
-    event => {
-
-      if (
-        event.key === "Enter" &&
-        !event.shiftKey
-      ) {
-
-        event.preventDefault();
-
-        sendMessage();
+        return JSON.parse(saved);
+      } catch {
+        return null;
       }
     }
-  );
 
-$("emojiButton")
-  .addEventListener(
-    "click",
-    () => {
+    /*
+    ================================================
+    AUTH
+    ================================================
+    */
 
-      const emojis = [
-        "😀",
-        "😂",
-        "😍",
-        "😭",
-        "😎",
-        "👍",
-        "❤️",
-        "🔥",
-        "🎉",
-        "🤣",
-        "🥳",
-        "👀",
-        "💀",
-        "🤔",
-        "😡"
-      ];
+    function showAuth(type) {
+      const loginForm = document.getElementById("loginForm");
+      const registerForm = document.getElementById("registerForm");
 
-      const emoji =
-        emojis[
-          Math.floor(
-            Math.random() *
-            emojis.length
-          )
-        ];
+      const loginTab = document.getElementById("loginTab");
+      const registerTab = document.getElementById("registerTab");
 
-      messageInput.value +=
-        emoji;
+      clearError("loginError");
+      clearError("registerError");
 
-      messageInput.focus();
+      if (type === "register") {
+        loginForm.classList.add("hidden");
+        registerForm.classList.remove("hidden");
+
+        loginTab.classList.remove("active");
+        registerTab.classList.add("active");
+      } else {
+        registerForm.classList.add("hidden");
+        loginForm.classList.remove("hidden");
+
+        registerTab.classList.remove("active");
+        loginTab.classList.add("active");
+      }
     }
-  );
-
-/* ========================================================
-   SERVERS
-======================================================== */
-
-async function loadServers() {
-
-  try {
-
-    const data =
-      await api(
-        "/api/servers"
-      );
-
-    renderServerIcons(
-      data.servers
-    );
-
-  } catch (error) {
-
-    console.error(error);
-  }
-}
-
-function renderServerIcons(
-  servers
-) {
-
-  serverList.innerHTML = "";
-
-  for (
-    const server of servers
-  ) {
-
-    const button =
-      document.createElement(
-        "button"
-      );
-
-    button.className =
-      "server-icon";
-
-    button.title =
-      server.name;
-
-    if (server.icon) {
-
-      button.innerHTML =
-        `<img src="${server.icon}" alt="">`;
-
-    } else {
-
-      button.textContent =
-        initials(
-          server.name
-        );
-    }
-
-    button.addEventListener(
-      "click",
-      () =>
-        openServer(
-          server.id
-        )
-    );
-
-    serverList.appendChild(
-      button
-    );
-  }
-}
-
-async function openServer(
-  serverId
-) {
-
-  try {
-
-    const data =
-      await api(
-        "/api/servers/" +
-        serverId
-      );
-
-    currentServer =
-      data.server;
-
-    currentFriend = null;
-
-    homeSidebar.classList.add(
-      "hidden"
-    );
-
-    channelSidebar.classList.remove(
-      "hidden"
-    );
-
-    composer.classList.add(
-      "hidden"
-    );
-
-    $("callButton")
-      .classList.add(
-        "hidden"
-      );
-
-    $("videoButton")
-      .classList.add(
-        "hidden"
-      );
-
-    $("serverHeaderName")
-      .textContent =
-      currentServer.name;
-
-    $("serverHeaderCode")
-      .textContent =
-      currentServer.inviteCode
-        ? "Invitation : " +
-          currentServer.inviteCode
-        : "";
-
-    renderChannels();
-
-    socket.emit(
-      "server:join",
-      currentServer.id
-    );
 
     document
-      .querySelectorAll(
-        ".server-icon"
-      )
-      .forEach(
-        item =>
-          item.classList.remove(
-            "active"
-          )
-      );
+      .getElementById("loginForm")
+      .addEventListener("submit", async function(event) {
+        event.preventDefault();
 
-    const buttons =
-      [
-        ...document.querySelectorAll(
-          "#serverList .server-icon"
-        )
-      ];
+        clearError("loginError");
 
-    const index =
-      buttons.findIndex(
-        button =>
-          button.title ===
-          currentServer.name
-      );
+        const login =
+          document.getElementById("loginInput").value.trim();
 
-    if (index >= 0) {
+        const password =
+          document.getElementById("loginPassword").value;
 
-      buttons[index]
-        .classList.add(
-          "active"
-        );
+        if (!login || !password) {
+          showError(
+            "loginError",
+            "Remplis tous les champs."
+          );
+          return;
+        }
+
+        try {
+          const data = await api("/api/login", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              login,
+              password
+            })
+          });
+
+          currentUser = data.user;
+
+          saveCurrentUser();
+
+          startApp();
+
+        } catch (error) {
+          showError(
+            "loginError",
+            error.message
+          );
+        }
+      });
+
+    document
+      .getElementById("registerForm")
+      .addEventListener("submit", async function(event) {
+        event.preventDefault();
+
+        clearError("registerError");
+
+        const email =
+          document.getElementById("registerEmail").value.trim();
+
+        const username =
+          document.getElementById("registerUsername").value.trim();
+
+        const displayName =
+          document.getElementById("registerDisplayName").value.trim();
+
+        const password =
+          document.getElementById("registerPassword").value;
+
+        if (!email || !username || !password) {
+          showError(
+            "registerError",
+            "L'email, le nom d'utilisateur et le mot de passe sont obligatoires."
+          );
+          return;
+        }
+
+        try {
+          const data = await api("/api/register", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              email: email,
+              username: username,
+              displayName: displayName || username,
+              password: password
+            })
+          });
+
+          currentUser = data.user;
+
+          saveCurrentUser();
+
+          startApp();
+
+        } catch (error) {
+          showError(
+            "registerError",
+            error.message
+          );
+        }
+      });
+
+    function logout() {
+      if (socket) {
+        socket.disconnect();
+      }
+
+      localStorage.removeItem("novachat_user");
+
+      currentUser = null;
+      currentFriend = null;
+      currentServer = null;
+
+      document
+        .getElementById("app")
+        .classList.add("hidden");
+
+      document
+        .getElementById("authScreen")
+        .classList.remove("hidden");
+
+      document
+        .getElementById("loginForm")
+        .reset();
+
+      document
+        .getElementById("registerForm")
+        .reset();
     }
 
-    $("homeButton")
-      .classList.remove(
-        "active"
+    /*
+    ================================================
+    APP
+    ================================================
+    */
+
+    async function startApp() {
+      document
+        .getElementById("authScreen")
+        .classList.add("hidden");
+
+      document
+        .getElementById("app")
+        .classList.remove("hidden");
+
+      updateCurrentUserUI();
+
+      connectSocket();
+
+      await loadFriends();
+      await loadServers();
+
+      showHome();
+    }
+
+    function connectSocket() {
+      if (socket) {
+        socket.disconnect();
+      }
+
+      socket = io();
+
+      socket.on("connect", () => {
+        console.log("Socket connecté.");
+
+        socket.emit(
+          "identify",
+          currentUser.id
+        );
+      });
+
+      socket.on("connect_error", error => {
+        console.error("Socket error:", error);
+      });
+
+      socket.on("dm_message", message => {
+        if (
+          currentFriend &&
+          (
+            message.from === currentFriend.id ||
+            message.to === currentFriend.id
+          )
+        ) {
+          loadDm(currentFriend.id);
+        }
+      });
+
+      socket.on("channel_message", message => {
+        if (
+          currentServer &&
+          currentChannel &&
+          message.channelId === currentChannel.id
+        ) {
+          addMessageToScreen(message);
+        }
+      });
+
+      socket.on("server_created", serverData => {
+        if (
+          serverData.members &&
+          serverData.members.includes(currentUser.id)
+        ) {
+          loadServers();
+        }
+      });
+
+      socket.on("friend_added", data => {
+        if (
+          data.userId === currentUser.id ||
+          data.friendId === currentUser.id
+        ) {
+          loadFriends();
+        }
+      });
+
+      socket.on("user_updated", user => {
+        if (currentUser && user.id === currentUser.id) {
+          currentUser = user;
+          saveCurrentUser();
+          updateCurrentUserUI();
+        }
+
+        loadFriends();
+      });
+
+      socket.on("presence", data => {
+        updatePresence(
+          data.userId,
+          data.online
+        );
+      });
+
+      setupVoiceSocket();
+    }
+
+    function updateCurrentUserUI() {
+      if (!currentUser) {
+        return;
+      }
+
+      document.getElementById(
+        "currentDisplayName"
+      ).textContent =
+        currentUser.displayName;
+
+      document.getElementById(
+        "currentUsername"
+      ).textContent =
+        "@" + currentUser.username;
+
+      const avatar = document.getElementById(
+        "currentAvatar"
       );
 
-    chatTitle.textContent =
-      currentServer.name;
+      if (currentUser.avatar) {
+        avatar.innerHTML =
+          `<img src="${escapeHtml(currentUser.avatar)}">`;
+      } else {
+        avatar.textContent =
+          initials(currentUser.displayName);
+      }
+    }
 
-    chatDescription.textContent =
-      "Sélectionne un salon.";
+    /*
+    ================================================
+    AMIS
+    ================================================
+    */
 
-    topbarIcon.textContent =
-      "◆";
+    async function loadFriends() {
+      if (!currentUser) {
+        return;
+      }
 
-    messages.innerHTML = `
-      <div class="empty">
-        <div>
-          <h2>
-            ${escapeHtml(
-              currentServer.name
-            )}
-          </h2>
+      try {
+        const data = await api(
+          "/api/friends/" + encodeURIComponent(currentUser.id)
+        );
 
-          <p>
-            Choisis un salon à gauche.
-          </p>
-        </div>
-      </div>
-    `;
+        friends = data.friends || [];
 
-  } catch (error) {
+        renderFriends();
 
-    showToast(
-      error.message
-    );
-  }
-}
+      } catch (error) {
+        console.error(error);
+      }
+    }
 
-function renderChannels() {
+    function renderFriends() {
+      const list =
+        document.getElementById("friendList");
 
-  channelList.innerHTML = "";
+      list.innerHTML = "";
 
-  const textChannels =
-    currentServer.channels.filter(
-      channel =>
-        channel.type === "text"
-    );
-
-  const voiceChannels =
-    currentServer.channels.filter(
-      channel =>
-        channel.type === "voice"
-    );
-
-  /*
-  TEXTUEL
-  */
-
-  const textCategory =
-    document.createElement(
-      "div"
-    );
-
-  textCategory.className =
-    "category";
-
-  textCategory.innerHTML = `
-    <span class="category-title">
-      TEXTUEL
-    </span>
-  `;
-
-  channelList.appendChild(
-    textCategory
-  );
-
-  for (
-    const channel of
-    textChannels
-  ) {
-
-    const button =
-      document.createElement(
-        "button"
-      );
-
-    button.className =
-      "channel";
-
-    button.innerHTML = `
-      <span class="channel-icon">
-        #
-      </span>
-
-      <span class="channel-name">
-        ${escapeHtml(
-          channel.name
-        )}
-      </span>
-    `;
-
-    button.addEventListener(
-      "click",
-      () =>
-        openTextChannel(
-          channel,
-          button
-        )
-    );
-
-    channelList.appendChild(
-      button
-    );
-  }
-
-  /*
-  VOICE
-  */
-
-  const voiceCategory =
-    document.createElement(
-      "div"
-    );
-
-  voiceCategory.className =
-    "category";
-
-  voiceCategory.innerHTML = `
-    <span class="category-title">
-      VOCAL
-    </span>
-  `;
-
-  channelList.appendChild(
-    voiceCategory
-  );
-
-  for (
-    const channel of
-    voiceChannels
-  ) {
-
-    const wrapper =
-      document.createElement(
-        "div"
-      );
-
-    const button =
-      document.createElement(
-        "button"
-      );
-
-    button.className =
-      "channel";
-
-    button.dataset.channelId =
-      channel.id;
-
-    button.innerHTML = `
-      <span class="channel-icon">
-        🔊
-      </span>
-
-      <span class="channel-name">
-        ${escapeHtml(
-          channel.name
-        )}
-      </span>
-    `;
-
-    button.addEventListener(
-      "click",
-      () =>
-        joinVoice(
-          channel
-        )
-    );
-
-    wrapper.appendChild(
-      button
-    );
-
-    const usersContainer =
-      document.createElement(
-        "div"
-      );
-
-    usersContainer.className =
-      "voice-users";
-
-    usersContainer.id =
-      "voice-users-" +
-      channel.id;
-
-    wrapper.appendChild(
-      usersContainer
-    );
-
-    channelList.appendChild(
-      wrapper
-    );
-
-    updateVoiceUsersForChannel(
-      channel.id
-    );
-  }
-}
-
-async function openTextChannel(
-  channel,
-  button
-) {
-
-  currentChannel =
-    channel;
-
-  document
-    .querySelectorAll(
-      ".channel"
-    )
-    .forEach(
-      item =>
-        item.classList.remove(
-          "active"
-        )
-    );
-
-  button.classList.add(
-    "active"
-  );
-
-  composer.classList.remove(
-    "hidden"
-  );
-
-  chatTitle.textContent =
-    channel.name;
-
-  chatDescription.textContent =
-    "Salon textuel";
-
-  topbarIcon.textContent =
-    "#";
-
-  try {
-
-    const data =
-      await api(
-        "/api/servers/" +
-        currentServer.id +
-        "/messages/" +
-        channel.id
-      );
-
-    messages.innerHTML = "";
-
-    if (
-      !data.messages.length
-    ) {
-
-      messages.innerHTML = `
-        <div class="empty">
-          <div>
-            <h2>
-              # ${escapeHtml(
-                channel.name
-              )}
-            </h2>
-
-            <p>
-              Aucun message pour le moment.
-            </p>
+      if (friends.length === 0) {
+        list.innerHTML = `
+          <div style="padding:10px;color:#949ba4;font-size:13px;">
+            Aucun ami pour le moment.
           </div>
+        `;
+
+        return;
+      }
+
+      friends.forEach(friend => {
+        const item =
+          document.createElement("div");
+
+        item.className = "friend";
+
+        if (
+          currentFriend &&
+          currentFriend.id === friend.id
+        ) {
+          item.classList.add("active");
+        }
+
+        item.innerHTML = `
+          ${avatarHtml(friend)}
+
+          <div class="friend-info">
+
+            <div class="friend-name">
+              ${escapeHtml(friend.displayName)}
+            </div>
+
+            <div class="friend-username">
+              @${escapeHtml(friend.username)}
+            </div>
+
+          </div>
+        `;
+
+        item.onclick = () => {
+          openDm(friend);
+        };
+
+        list.appendChild(item);
+      });
+    }
+
+    function openAddFriend() {
+      document
+        .getElementById("friendUsername")
+        .value = "";
+
+      clearError("friendError");
+
+      document
+        .getElementById("friendModal")
+        .classList.remove("hidden");
+    }
+
+    async function addFriend() {
+      clearError("friendError");
+
+      const username =
+        document
+          .getElementById("friendUsername")
+          .value
+          .trim();
+
+      if (!username) {
+        showError(
+          "friendError",
+          "Entre un nom d'utilisateur."
+        );
+        return;
+      }
+
+      try {
+        await api("/api/friends/add", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            userId: currentUser.id,
+            username
+          })
+        });
+
+        closeModal("friendModal");
+
+        await loadFriends();
+
+        alert("Ami ajouté !");
+
+      } catch (error) {
+        showError(
+          "friendError",
+          error.message
+        );
+      }
+    }
+
+    function updatePresence(userId, online) {
+      const friendElement =
+        document.querySelector(
+          `[data-user-id="${userId}"]`
+        );
+
+      if (friendElement) {
+        friendElement.dataset.online =
+          online ? "true" : "false";
+      }
+    }
+
+    /*
+    ================================================
+    MP
+    ================================================
+    */
+
+    async function openDm(friend) {
+      currentFriend = friend;
+      currentServer = null;
+      currentChannel = null;
+
+      renderFriends();
+
+      document.getElementById(
+        "sidebarTitle"
+      ).textContent = "Messages privés";
+
+      document.getElementById(
+        "topbarTitle"
+      ).textContent =
+        friend.displayName;
+
+      document
+        .getElementById("emptyState")
+        .classList.add("hidden");
+
+      document
+        .getElementById("messages")
+        .classList.remove("hidden");
+
+      document
+        .getElementById("composer")
+        .classList.remove("hidden");
+
+      await loadDm(friend.id);
+    }
+
+    async function loadDm(friendId) {
+      try {
+        const data = await api(
+          "/api/dm/" +
+          encodeURIComponent(currentUser.id) +
+          "/" +
+          encodeURIComponent(friendId)
+        );
+
+        renderMessages(data.messages || []);
+
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    function renderMessages(messages) {
+      const container =
+        document.getElementById("messages");
+
+      container.innerHTML = "";
+
+      messages.forEach(message => {
+        addMessageToScreen(message, false);
+      });
+
+      container.scrollTop =
+        container.scrollHeight;
+    }
+
+    function addMessageToScreen(
+      message,
+      scroll = true
+    ) {
+      const container =
+        document.getElementById("messages");
+
+      const user =
+        findCachedUser(message.from) ||
+        {
+          displayName:
+            message.displayName ||
+            "Utilisateur",
+          username:
+            message.username ||
+            "",
+          avatar:
+            message.avatar ||
+            ""
+        };
+
+      const element =
+        document.createElement("div");
+
+      element.className = "message";
+
+      element.innerHTML = `
+        ${avatarHtml(user)}
+
+        <div class="message-content">
+
+          <div class="message-header">
+
+            <span class="message-name">
+              ${escapeHtml(
+                user.displayName
+              )}
+            </span>
+
+            <span class="message-date">
+              ${new Date(
+                message.createdAt
+              ).toLocaleTimeString(
+                "fr-FR",
+                {
+                  hour: "2-digit",
+                  minute: "2-digit"
+                }
+              )}
+            </span>
+
+          </div>
+
+          <div class="message-text">
+            ${escapeHtml(message.content)}
+          </div>
+
         </div>
       `;
 
-      return;
-    }
-
-    for (
-      const message of
-      data.messages
-    ) {
-
-      renderServerMessage(
-        message
-      );
-    }
-
-    scrollMessages();
-
-  } catch (error) {
-
-    showToast(
-      error.message
-    );
-  }
-}
-
-function renderServerMessage(
-  message
-) {
-
-  const user =
-    currentServer.members.find(
-      member =>
-        member.id ===
-        message.senderId
-    );
-
-  if (!user)
-    return;
-
-  const element =
-    document.createElement(
-      "div"
-    );
-
-  element.className =
-    "message";
-
-  const date =
-    new Date(
-      message.createdAt
-    );
-
-  element.innerHTML = `
-    ${avatarHtml(
-      user,
-      "message-avatar"
-    )}
-
-    <div class="message-content-wrapper">
-
-      <div class="message-header">
-
-        <span class="message-author">
-          ${escapeHtml(
-            user.displayName
-          )}
-        </span>
-
-        <span class="message-time">
-          ${date.toLocaleTimeString(
-            [],
-            {
-              hour:
-                "2-digit",
-              minute:
-                "2-digit"
-            }
-          )}
-        </span>
-
-      </div>
-
-      <div class="message-text">
-        ${escapeHtml(
-          message.content
-        )}
-      </div>
-
-    </div>
-  `;
-
-  messages.appendChild(
-    element
-  );
-}
-
-/* ========================================================
-   CREATE SERVER
-======================================================== */
-
-$("createServerButton")
-  .addEventListener(
-    "click",
-    () => {
-
-      openModal(`
-        <h2>
-          Créer un serveur
-        </h2>
-
-        <p style="color:#949ba4">
-          Ton serveur aura automatiquement :
-        </p>
-
-        <ul style="color:#b5bac1">
-          <li># général</li>
-          <li>🔊 Général</li>
-        </ul>
-
-        <label>
-          Nom du serveur
-        </label>
-
-        <input
-          id="newServerName"
-          class="modal-input"
-          maxlength="50"
-          placeholder="Mon serveur"
-        >
-
-        <div class="modal-actions">
-
-          <button
-            class="secondary"
-            onclick="closeModal()"
-          >
-            Annuler
-          </button>
-
-          <button
-            class="primary"
-            id="createServerConfirm"
-          >
-            Créer
-          </button>
-
-        </div>
-      `);
-
-      $("createServerConfirm")
-        .addEventListener(
-          "click",
-          async () => {
-
-            try {
-
-              const data =
-                await api(
-                  "/api/servers",
-                  {
-                    method: "POST",
-                    body:
-                      JSON.stringify({
-                        name:
-                          $(
-                            "newServerName"
-                          )
-                            .value
-                            .trim()
-                      })
-                  }
-                );
-
-              closeModal();
-
-              await loadServers();
-
-              await openServer(
-                data.server.id
-              );
-
-              showToast(
-                "Serveur créé !"
-              );
-
-            } catch (error) {
-
-              showToast(
-                error.message
-              );
-            }
-          }
-        );
-    }
-  );
-
-/* ========================================================
-   JOIN SERVER
-======================================================== */
-
-$("joinServerButton")
-  .addEventListener(
-    "click",
-    () => {
-
-      openModal(`
-        <h2>
-          Rejoindre un serveur
-        </h2>
-
-        <p style="color:#949ba4">
-          Entre le code d'invitation du serveur.
-        </p>
-
-        <label>
-          Code d'invitation
-        </label>
-
-        <input
-          id="inviteCode"
-          class="modal-input"
-          placeholder="A1B2C3D4"
-        >
-
-        <div class="modal-actions">
-
-          <button
-            class="secondary"
-            onclick="closeModal()"
-          >
-            Annuler
-          </button>
-
-          <button
-            class="primary"
-            id="joinServerConfirm"
-          >
-            Rejoindre
-          </button>
-
-        </div>
-      `);
-
-      $("joinServerConfirm")
-        .addEventListener(
-          "click",
-          async () => {
-
-            try {
-
-              const data =
-                await api(
-                  "/api/servers/join",
-                  {
-                    method: "POST",
-                    body:
-                      JSON.stringify({
-                        inviteCode:
-                          $(
-                            "inviteCode"
-                          )
-                            .value
-                            .trim()
-                      })
-                  }
-                );
-
-              closeModal();
-
-              await loadServers();
-
-              await openServer(
-                data.server.id
-              );
-
-              showToast(
-                "Serveur rejoint !"
-              );
-
-            } catch (error) {
-
-              showToast(
-                error.message
-              );
-            }
-          }
-        );
-    }
-  );
-
-/* ========================================================
-   VOICE
-======================================================== */
-
-let localStream = null;
-let voicePeers = new Map();
-
-async function joinVoice(
-  channel
-) {
-
-  if (
-    !currentServer
-  )
-    return;
-
-  try {
-
-    if (
-      currentChannel?.type ===
-      "voice"
-    ) {
-      socket.emit(
-        "voice:leave"
-      );
-    }
-
-    currentChannel =
-      channel;
-
-    localStream =
-      await navigator
-        .mediaDevices
-        .getUserMedia({
-          audio: true,
-          video: false
-        });
-
-    socket.emit(
-      "voice:join",
-      {
-        serverId:
-          currentServer.id,
-        channelId:
-          channel.id
+      container.appendChild(element);
+
+      if (scroll) {
+        container.scrollTop =
+          container.scrollHeight;
       }
-    );
+    }
 
-    chatTitle.textContent =
-      channel.name;
+    function findCachedUser(userId) {
+      if (
+        currentUser &&
+        currentUser.id === userId
+      ) {
+        return currentUser;
+      }
 
-    chatDescription.textContent =
-      "Salon vocal";
-
-    topbarIcon.textContent =
-      "🔊";
-
-    composer.classList.add(
-      "hidden"
-    );
-
-    messages.innerHTML = `
-      <div class="empty">
-        <div>
-          <h2>
-            🔊 ${escapeHtml(
-              channel.name
-            )}
-          </h2>
-
-          <p>
-            Tu es connecté au salon vocal.
-          </p>
-
-          <button
-            class="danger"
-            id="leaveVoiceButton"
-            style="margin-top:15px"
-          >
-            ☎ Quitter le vocal
-          </button>
-        </div>
-      </div>
-    `;
-
-    $("leaveVoiceButton")
-      .addEventListener(
-        "click",
-        leaveVoice
-      );
-
-    showToast(
-      "Connecté au vocal."
-    );
-
-  } catch (error) {
-
-    console.error(error);
-
-    showToast(
-      "Impossible d'accéder au microphone. Vérifie les permissions du navigateur."
-    );
-  }
-}
-
-function leaveVoice() {
-
-  socket.emit(
-    "voice:leave"
-  );
-
-  if (localStream) {
-
-    localStream
-      .getTracks()
-      .forEach(
-        track =>
-          track.stop()
-      );
-
-    localStream = null;
-  }
-
-  for (
-    const peer of
-    voicePeers.values()
-  ) {
-
-    peer.close();
-  }
-
-  voicePeers.clear();
-
-  if (
-    currentServer
-  ) {
-
-    const textChannel =
-      currentServer.channels.find(
-        channel =>
-          channel.type ===
-          "text"
-      );
-
-    if (textChannel) {
-
-      openTextChannel(
-        textChannel,
-        document.querySelector(
-          `.channel`
-        )
+      return friends.find(
+        user => user.id === userId
       );
     }
-  }
 
-  showToast(
-    "Tu as quitté le vocal."
-  );
-}
-
-/* ========================================================
-   VOICE USERS
-======================================================== */
-
-socket.on(
-  "voice:update",
-  data => {
-
-    updateVoiceUsersForChannel(
-      data.channelId,
-      data.users
-    );
-
-    if (
-      currentServer &&
-      data.serverId ===
-        currentServer.id
-    ) {
-
-      const channel =
-        currentServer.channels.find(
-          item =>
-            item.id ===
-            data.channelId
+    async function sendMessage() {
+      const input =
+        document.getElementById(
+          "messageInput"
         );
+
+      const content =
+        input.value.trim();
+
+      if (!content) {
+        return;
+      }
 
       if (
-        channel &&
-        channel.type ===
-          "voice"
+        currentFriend &&
+        !currentServer
       ) {
+        socket.emit("dm_send", {
+          to: currentFriend.id,
+          content
+        });
+      }
 
-        updateVoiceUsersForChannel(
-          channel.id,
-          data.users
+      if (
+        currentServer &&
+        currentChannel &&
+        currentChannel.type === "text"
+      ) {
+        socket.emit("channel_send", {
+          serverId: currentServer.id,
+          channelId: currentChannel.id,
+          content
+        });
+      }
+
+      input.value = "";
+      input.focus();
+    }
+
+    document
+      .getElementById("sendBtn")
+      .addEventListener(
+        "click",
+        sendMessage
+      );
+
+    document
+      .getElementById("messageInput")
+      .addEventListener(
+        "keydown",
+        event => {
+          if (
+            event.key === "Enter" &&
+            !event.shiftKey
+          ) {
+            event.preventDefault();
+            sendMessage();
+          }
+        }
+      );
+
+    /*
+    ================================================
+    SERVEURS
+    ================================================
+    */
+
+    async function loadServers() {
+      try {
+        const data = await api(
+          "/api/servers/" +
+          encodeURIComponent(currentUser.id)
+        );
+
+        servers = data.servers || [];
+
+        renderServers();
+
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    function renderServers() {
+      const container =
+        document.getElementById("serverList");
+
+      container.innerHTML = "";
+
+      servers.forEach(serverData => {
+        const button =
+          document.createElement("button");
+
+        button.className = "server-icon";
+
+        button.title =
+          serverData.name;
+
+        if (
+          currentServer &&
+          currentServer.id === serverData.id
+        ) {
+          button.classList.add("active");
+        }
+
+        if (serverData.icon) {
+          button.innerHTML =
+            `<img src="${escapeHtml(serverData.icon)}">`;
+        } else {
+          button.textContent =
+            initials(serverData.name);
+        }
+
+        button.onclick = () => {
+          openServer(serverData);
+        };
+
+        container.appendChild(button);
+      });
+    }
+
+    function openCreateServer() {
+      document.getElementById(
+        "serverName"
+      ).value = "";
+
+      document.getElementById(
+        "serverIcon"
+      ).value = "";
+
+      clearError("serverError");
+
+      document
+        .getElementById("serverModal")
+        .classList.remove("hidden");
+    }
+
+    function readFileAsDataURL(file) {
+      return new Promise(
+        (resolve, reject) => {
+          const reader =
+            new FileReader();
+
+          reader.onload = () =>
+            resolve(reader.result);
+
+          reader.onerror = reject;
+
+          reader.readAsDataURL(file);
+        }
+      );
+    }
+
+    async function createServer() {
+      clearError("serverError");
+
+      const name =
+        document.getElementById(
+          "serverName"
+        ).value.trim();
+
+      const file =
+        document.getElementById(
+          "serverIcon"
+        ).files[0];
+
+      if (!name) {
+        showError(
+          "serverError",
+          "Donne un nom au serveur."
+        );
+        return;
+      }
+
+      try {
+        let icon = "";
+
+        if (file) {
+          if (file.size > 1_000_000) {
+            showError(
+              "serverError",
+              "L'image doit faire moins de 1 Mo."
+            );
+            return;
+          }
+
+          icon =
+            await readFileAsDataURL(file);
+        }
+
+        const data = await api(
+          "/api/servers",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              ownerId: currentUser.id,
+              name,
+              icon
+            })
+          }
+        );
+
+        closeModal("serverModal");
+
+        await loadServers();
+
+        openServer(data.server);
+
+      } catch (error) {
+        showError(
+          "serverError",
+          error.message
         );
       }
     }
-  }
-);
 
-function updateVoiceUsersForChannel(
-  channelId,
-  users
-) {
+    async function openServer(serverData) {
+      currentServer = serverData;
+      currentFriend = null;
+      currentChannel = null;
 
-  const container =
-    document.getElementById(
-      "voice-users-" +
-      channelId
-    );
+      renderServers();
+      renderFriends();
 
-  if (!container)
-    return;
+      document.getElementById(
+        "sidebarTitle"
+      ).textContent =
+        serverData.name;
 
-  if (!users) {
+      document.getElementById(
+        "topbarTitle"
+      ).textContent =
+        serverData.name;
 
-    container.innerHTML =
-      "";
+      const sidebar =
+        document.getElementById(
+          "sidebarContent"
+        );
 
-    return;
-  }
+      sidebar.innerHTML = "";
 
-  container.innerHTML =
-    users.map(
-      user => `
-        <div class="voice-user">
+      const textTitle =
+        document.createElement("div");
 
-          ${avatarHtml(
-            user,
-            "voice-user-avatar"
-          )}
+      textTitle.className =
+        "section-title";
 
-          <div class="voice-user-name">
+      textTitle.textContent =
+        "Salons textuels";
+
+      sidebar.appendChild(
+        textTitle
+      );
+
+      const textChannels =
+        serverData.channels.filter(
+          channel =>
+            channel.type === "text"
+        );
+
+      textChannels.forEach(
+        channel => {
+          sidebar.appendChild(
+            createChannelElement(channel)
+          );
+        }
+      );
+
+      const voiceTitle =
+        document.createElement("div");
+
+      voiceTitle.className =
+        "section-title";
+
+      voiceTitle.textContent =
+        "Salons vocaux";
+
+      sidebar.appendChild(
+        voiceTitle
+      );
+
+      const voiceChannels =
+        serverData.channels.filter(
+          channel =>
+            channel.type === "voice"
+        );
+
+      voiceChannels.forEach(
+        channel => {
+          sidebar.appendChild(
+            createChannelElement(channel)
+          );
+        }
+      );
+
+      document
+        .getElementById("emptyState")
+        .classList.remove("hidden");
+
+      document
+        .getElementById("messages")
+        .classList.add("hidden");
+
+      document
+        .getElementById("composer")
+        .classList.add("hidden");
+
+      socket.emit(
+        "server_join",
+        serverData.id
+      );
+    }
+
+    function createChannelElement(channel) {
+      const element =
+        document.createElement("div");
+
+      element.className =
+        "channel";
+
+      element.innerHTML = `
+        <span class="channel-icon">
+          ${
+            channel.type === "voice"
+              ? "🔊"
+              : "#"
+          }
+        </span>
+
+        <span>
+          ${escapeHtml(channel.name)}
+        </span>
+      `;
+
+      element.onclick = () => {
+        if (channel.type === "text") {
+          openTextChannel(channel);
+        } else {
+          joinVoice(channel);
+        }
+      };
+
+      return element;
+    }
+
+    async function openTextChannel(channel) {
+      currentChannel = channel;
+
+      document.getElementById(
+        "topbarTitle"
+      ).textContent =
+        "# " + channel.name;
+
+      document
+        .getElementById("emptyState")
+        .classList.add("hidden");
+
+      document
+        .getElementById("messages")
+        .classList.remove("hidden");
+
+      document
+        .getElementById("composer")
+        .classList.remove("hidden");
+
+      try {
+        const data = await api(
+          "/api/channels/" +
+          encodeURIComponent(channel.id) +
+          "/messages"
+        );
+
+        renderMessages(
+          data.messages || []
+        );
+
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    /*
+    ================================================
+    PARAMÈTRES
+    ================================================
+    */
+
+    function openSettings() {
+      document.getElementById(
+        "settingsDisplayName"
+      ).value =
+        currentUser.displayName || "";
+
+      document.getElementById(
+        "settingsUsername"
+      ).value =
+        currentUser.username || "";
+
+      const avatar =
+        document.getElementById(
+          "settingsAvatar"
+        );
+
+      if (currentUser.avatar) {
+        avatar.innerHTML =
+          `<img src="${escapeHtml(currentUser.avatar)}">`;
+      } else {
+        avatar.textContent =
+          initials(
+            currentUser.displayName
+          );
+      }
+
+      document.getElementById(
+        "avatarFile"
+      ).value = "";
+
+      clearError("settingsError");
+
+      document
+        .getElementById("settingsModal")
+        .classList.remove("hidden");
+    }
+
+    async function saveSettings() {
+      clearError("settingsError");
+
+      const displayName =
+        document.getElementById(
+          "settingsDisplayName"
+        ).value.trim();
+
+      const username =
+        document.getElementById(
+          "settingsUsername"
+        ).value.trim();
+
+      const file =
+        document.getElementById(
+          "avatarFile"
+        ).files[0];
+
+      try {
+        let avatar =
+          currentUser.avatar || "";
+
+        if (file) {
+          if (file.size > 1_500_000) {
+            showError(
+              "settingsError",
+              "La photo doit faire moins de 1,5 Mo."
+            );
+            return;
+          }
+
+          avatar =
+            await readFileAsDataURL(file);
+        }
+
+        const profileData =
+          await api("/api/profile", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              userId: currentUser.id,
+              displayName,
+              avatar
+            })
+          });
+
+        currentUser =
+          profileData.user;
+
+        if (
+          username &&
+          username.toLowerCase() !==
+          currentUser.username.toLowerCase()
+        ) {
+          const usernameData =
+            await api("/api/username", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                userId: currentUser.id,
+                username
+              })
+            });
+
+          currentUser =
+            usernameData.user;
+        }
+
+        saveCurrentUser();
+
+        updateCurrentUserUI();
+
+        closeModal("settingsModal");
+
+        await loadFriends();
+
+      } catch (error) {
+        showError(
+          "settingsError",
+          error.message
+        );
+      }
+    }
+
+    /*
+    ================================================
+    MODALS
+    ================================================
+    */
+
+    function closeModal(id) {
+      document
+        .getElementById(id)
+        .classList.add("hidden");
+    }
+
+    /*
+    ================================================
+    ACCUEIL
+    ================================================
+    */
+
+    function showHome() {
+      currentFriend = null;
+      currentServer = null;
+      currentChannel = null;
+
+      renderServers();
+      renderFriends();
+
+      document.getElementById(
+        "sidebarTitle"
+      ).textContent =
+        "Messages privés";
+
+      document.getElementById(
+        "topbarTitle"
+      ).textContent =
+        "Messages privés";
+
+      document
+        .getElementById("messages")
+        .classList.add("hidden");
+
+      document
+        .getElementById("composer")
+        .classList.add("hidden");
+
+      document
+        .getElementById("emptyState")
+        .classList.remove("hidden");
+    }
+
+    /*
+    ================================================
+    VOIX / WEBRTC
+    ================================================
+    */
+
+    function setupVoiceSocket() {
+      socket.on(
+        "voice_users",
+        data => {
+          if (
+            currentChannel &&
+            currentChannel.id === data.channelId
+          ) {
+            renderVoiceUsers(
+              data.users || []
+            );
+          }
+        }
+      );
+
+      socket.on(
+        "voice_user_joined",
+        async data => {
+          if (!localStream) {
+            return;
+          }
+
+          await createPeerConnection(
+            data.socketId,
+            true
+          );
+        }
+      );
+
+      socket.on(
+        "voice_user_left",
+        data => {
+          if (
+            peerConnections[
+              data.socketId
+            ]
+          ) {
+            peerConnections[
+              data.socketId
+            ].close();
+
+            delete peerConnections[
+              data.socketId
+            ];
+          }
+        }
+      );
+
+      socket.on(
+        "webrtc_offer",
+        async data => {
+          if (!localStream) {
+            return;
+          }
+
+          const peer =
+            await createPeerConnection(
+              data.from,
+              false
+            );
+
+          await peer.setRemoteDescription(
+            new RTCSessionDescription(
+              data.offer
+            )
+          );
+
+          const answer =
+            await peer.createAnswer();
+
+          await peer.setLocalDescription(
+            answer
+          );
+
+          socket.emit(
+            "webrtc_answer",
+            {
+              target: data.from,
+              answer
+            }
+          );
+        }
+      );
+
+      socket.on(
+        "webrtc_answer",
+        async data => {
+          const peer =
+            peerConnections[data.from];
+
+          if (!peer) {
+            return;
+          }
+
+          await peer.setRemoteDescription(
+            new RTCSessionDescription(
+              data.answer
+            )
+          );
+        }
+      );
+
+      socket.on(
+        "webrtc_ice",
+        async data => {
+          const peer =
+            peerConnections[data.from];
+
+          if (!peer || !data.candidate) {
+            return;
+          }
+
+          try {
+            await peer.addIceCandidate(
+              new RTCIceCandidate(
+                data.candidate
+              )
+            );
+          } catch (error) {
+            console.error(
+              "ICE error:",
+              error
+            );
+          }
+        }
+      );
+    }
+
+    async function joinVoice(channel) {
+      try {
+        if (localStream) {
+          leaveVoice();
+        }
+
+        currentChannel = channel;
+
+        localStream =
+          await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: false
+          });
+
+        document
+          .getElementById("voicePanel")
+          .classList.remove("hidden");
+
+        document.getElementById(
+          "voiceTitle"
+        ).textContent =
+          "🔊 " + channel.name;
+
+        document.getElementById(
+          "voiceUsers"
+        ).innerHTML =
+          avatarHtml(currentUser) +
+          `<span>${escapeHtml(
+            currentUser.displayName
+          )}</span>`;
+
+        socket.emit(
+          "voice_join",
+          {
+            serverId: currentServer.id,
+            channelId: channel.id
+          }
+        );
+
+      } catch (error) {
+        console.error(error);
+
+        alert(
+          "Impossible d'utiliser ton microphone. Vérifie les permissions du navigateur."
+        );
+      }
+    }
+
+    async function createPeerConnection(
+      socketId,
+      createOffer
+    ) {
+      if (
+        peerConnections[socketId]
+      ) {
+        return peerConnections[socketId];
+      }
+
+      const peer =
+        new RTCPeerConnection({
+          iceServers: [
+            {
+              urls: "stun:stun.l.google.com:19302"
+            },
+            {
+              urls: "stun:stun1.l.google.com:19302"
+            }
+          ]
+        });
+
+      peerConnections[socketId] =
+        peer;
+
+      localStream
+        .getTracks()
+        .forEach(track => {
+          peer.addTrack(
+            track,
+            localStream
+          );
+        });
+
+      peer.onicecandidate =
+        event => {
+          if (
+            event.candidate
+          ) {
+            socket.emit(
+              "webrtc_ice",
+              {
+                target: socketId,
+                candidate:
+                  event.candidate
+              }
+            );
+          }
+        };
+
+      peer.ontrack =
+        event => {
+          let audio =
+            document.getElementById(
+              "audio-" + socketId
+            );
+
+          if (!audio) {
+            audio =
+              document.createElement(
+                "audio"
+              );
+
+            audio.id =
+              "audio-" + socketId;
+
+            audio.autoplay = true;
+
+            document.body.appendChild(
+              audio
+            );
+          }
+
+          audio.srcObject =
+            event.streams[0];
+        };
+
+      if (createOffer) {
+        const offer =
+          await peer.createOffer();
+
+        await peer.setLocalDescription(
+          offer
+        );
+
+        socket.emit(
+          "webrtc_offer",
+          {
+            target: socketId,
+            offer
+          }
+        );
+      }
+
+      return peer;
+    }
+
+    function renderVoiceUsers(users) {
+      const container =
+        document.getElementById(
+          "voiceUsers"
+        );
+
+      container.innerHTML = "";
+
+      users.forEach(item => {
+        const user =
+          item.user;
+
+        const element =
+          document.createElement("div");
+
+        element.className =
+          "voice-user";
+
+        element.innerHTML = `
+          ${avatarHtml(user)}
+
+          <div>
             ${escapeHtml(
               user.displayName
             )}
           </div>
+        `;
 
-        </div>
-      `
-    ).join("");
-}
-
-/* ========================================================
-   PROFILE SETTINGS
-======================================================== */
-
-function openSettings() {
-
-  openModal(`
-    <h2>
-      ⚙ Paramètres
-    </h2>
-
-    <div class="profile-preview">
-      ${
-        currentUser.avatar
-          ? `
-            <img
-              src="${currentUser.avatar}"
-              alt=""
-            >
-          `
-          : escapeHtml(
-              initials(
-                currentUser.displayName
-              )
-            )
-      }
-    </div>
-
-    <label>
-      Photo de profil
-    </label>
-
-    <input
-      type="file"
-      id="avatarFile"
-      class="file-input"
-      accept="image/png,image/jpeg,image/webp,image/gif"
-    >
-
-    <p style="
-      color:#949ba4;
-      font-size:12px;
-    ">
-      Choisis directement une image présente sur ton PC.
-      Maximum 5 Mo.
-    </p>
-
-    <h3>
-      Nom d'affichage
-    </h3>
-
-    <input
-      id="displayNameSetting"
-      class="modal-input"
-      maxlength="32"
-      value="${escapeAttribute(
-        currentUser.displayName
-      )}"
-    >
-
-    <button
-      class="primary"
-      id="saveDisplayName"
-      style="margin-top:8px"
-    >
-      Enregistrer le nom
-    </button>
-
-    <h3 style="margin-top:25px">
-      Nom d'utilisateur
-    </h3>
-
-    <p style="color:#949ba4">
-      @${escapeHtml(
-        currentUser.username
-      )}
-    </p>
-
-    <input
-      id="usernameSetting"
-      class="modal-input"
-      maxlength="24"
-      placeholder="Nouveau nom d'utilisateur"
-    >
-
-    <button
-      class="secondary"
-      id="saveUsername"
-    >
-      Modifier
-    </button>
-
-    <div class="modal-actions">
-
-      <button
-        class="danger"
-        id="logoutButton"
-      >
-        Se déconnecter
-      </button>
-
-      <button
-        class="secondary"
-        onclick="closeModal()"
-      >
-        Fermer
-      </button>
-
-    </div>
-  `);
-
-  $("avatarFile")
-    .addEventListener(
-      "change",
-      async event => {
-
-        const file =
-          event.target.files[0];
-
-        if (!file)
-          return;
-
-        if (
-          file.size >
-          5 * 1024 * 1024
-        ) {
-
-          showToast(
-            "Image trop grande. Maximum 5 Mo."
-          );
-
-          return;
-        }
-
-        const reader =
-          new FileReader();
-
-        reader.onload =
-          async () => {
-
-            try {
-
-              const data =
-                await api(
-                  "/api/profile/avatar",
-                  {
-                    method: "POST",
-                    body:
-                      JSON.stringify({
-                        avatar:
-                          reader.result
-                      })
-                  }
-                );
-
-              currentUser =
-                data.user;
-
-              updateMyUserUI();
-
-              closeModal();
-
-              showToast(
-                "Photo de profil modifiée !"
-              );
-
-            } catch (error) {
-
-              showToast(
-                error.message
-              );
-            }
-          };
-
-        reader.readAsDataURL(
-          file
+        container.appendChild(
+          element
         );
+      });
+    }
+
+    function toggleMute() {
+      if (!localStream) {
+        return;
       }
-    );
 
-  $("saveDisplayName")
-    .addEventListener(
-      "click",
-      async () => {
+      const tracks =
+        localStream.getAudioTracks();
 
+      if (!tracks.length) {
+        return;
+      }
+
+      const enabled =
+        tracks[0].enabled;
+
+      tracks.forEach(track => {
+        track.enabled =
+          !enabled;
+      });
+
+      document.getElementById(
+        "muteButton"
+      ).textContent =
+        enabled
+          ? "🔇 Micro coupé"
+          : "🎙️ Micro";
+    }
+
+    function leaveVoice() {
+      if (socket) {
+        socket.emit("voice_leave");
+      }
+
+      Object.values(
+        peerConnections
+      ).forEach(peer => {
         try {
+          peer.close();
+        } catch {}
+      });
 
-          const data =
-            await api(
-              "/api/profile/display-name",
-              {
-                method: "POST",
-                body:
-                  JSON.stringify({
-                    displayName:
-                      $(
-                        "displayNameSetting"
-                      )
-                        .value
-                        .trim()
-                  })
-              }
-            );
+      peerConnections = {};
 
-          currentUser =
-            data.user;
-
-          updateMyUserUI();
-
-          closeModal();
-
-          showToast(
-            "Nom d'affichage modifié."
+      if (localStream) {
+        localStream
+          .getTracks()
+          .forEach(track =>
+            track.stop()
           );
 
-        } catch (error) {
-
-          showToast(
-            error.message
-          );
-        }
+        localStream = null;
       }
-    );
 
-  $("saveUsername")
-    .addEventListener(
-      "click",
-      async () => {
+      document
+        .querySelectorAll("audio[id^='audio-']")
+        .forEach(audio => {
+          audio.srcObject = null;
+          audio.remove();
+        });
 
-        try {
+      document
+        .getElementById("voicePanel")
+        .classList.add("hidden");
+    }
 
-          const data =
-            await api(
-              "/api/profile/username",
-              {
-                method: "POST",
-                body:
-                  JSON.stringify({
-                    username:
-                      $(
-                        "usernameSetting"
-                      )
-                        .value
-                        .trim()
-                  })
-              }
-            );
+    /*
+    ================================================
+    INITIALISATION
+    ================================================
+    */
 
-          currentUser =
-            data.user;
-
-          updateMyUserUI();
-
-          closeModal();
-
-          showToast(
-            "Nom d'utilisateur modifié."
-          );
-
-        } catch (error) {
-
-          showToast(
-            error.message
-          );
-        }
-      }
-    );
-
-  $("logoutButton")
-    .addEventListener(
-      "click",
+    window.addEventListener(
+      "beforeunload",
       () => {
-
-        socket.emit(
-          "voice:leave"
-        );
-
-        localStorage.removeItem(
-          "novachat_token"
-        );
-
-        token = null;
-        currentUser = null;
-
-        location.reload();
+        if (localStream) {
+          leaveVoice();
+        }
       }
     );
-}
 
-$("settingsButton")
-  .addEventListener(
-    "click",
-    openSettings
-  );
+    const savedUser =
+      loadCurrentUser();
 
-$("serverSettingsProfile")
-  .addEventListener(
-    "click",
-    openSettings
-  );
+    if (savedUser && savedUser.id) {
+      currentUser = savedUser;
 
-/* ========================================================
-   SERVER SETTINGS
-======================================================== */
-
-$("serverSettingsButton")
-  .addEventListener(
-    "click",
-    () => {
-
-      if (!currentServer)
-        return;
-
-      const isOwner =
-        currentServer.ownerId ===
-        currentUser.id;
-
-      if (!isOwner) {
-
-        showToast(
-          "Seul le propriétaire peut modifier ce serveur."
-        );
-
-        return;
-      }
-
-      openModal(`
-        <h2>
-          ⚙ Paramètres du serveur
-        </h2>
-
-        <p style="color:#949ba4">
-          Code d'invitation :
-        </p>
-
-        <div style="
-          padding:12px;
-          background:#1e1f22;
-          border-radius:5px;
-          font-weight:bold;
-          letter-spacing:2px;
-        ">
-          ${escapeHtml(
-            currentServer.inviteCode
-          )}
-        </div>
-
-        <label>
-          Icône du serveur
-        </label>
-
-        <input
-          type="file"
-          id="serverIconFile"
-          class="file-input"
-          accept="image/png,image/jpeg,image/webp,image/gif"
-        >
-
-        <div class="modal-actions">
-
-          <button
-            class="secondary"
-            onclick="closeModal()"
-          >
-            Fermer
-          </button>
-
-        </div>
-      `);
-
-      $("serverIconFile")
-        .addEventListener(
-          "change",
-          event => {
-
-            const file =
-              event.target.files[0];
-
-            if (!file)
-              return;
-
-            if (
-              file.size >
-              5 * 1024 * 1024
-            ) {
-
-              showToast(
-                "Image trop grande."
-              );
-
-              return;
-            }
-
-            const reader =
-              new FileReader();
-
-            reader.onload =
-              async () => {
-
-                try {
-
-                  const data =
-                    await api(
-                      "/api/servers/" +
-                      currentServer.id +
-                      "/icon",
-                      {
-                        method: "POST",
-                        body:
-                          JSON.stringify({
-                            icon:
-                              reader.result
-                          })
-                      }
-                    );
-
-                  currentServer =
-                    data.server;
-
-                  await loadServers();
-
-                  closeModal();
-
-                  showToast(
-                    "Icône du serveur modifiée."
-                  );
-
-                  await openServer(
-                    currentServer.id
-                  );
-
-                } catch (error) {
-
-                  showToast(
-                    error.message
-                  );
-                }
-              };
-
-            reader.readAsDataURL(
-              file
-            );
-          }
-        );
+      startApp();
     }
-  );
-
-/* ========================================================
-   MEMBERS
-======================================================== */
-
-function renderMembers(
-  friends
-) {
-
-  const online =
-    friends.filter(
-      friend =>
-        friend.online
-    );
-
-  const offline =
-    friends.filter(
-      friend =>
-        !friend.online
-    );
-
-  $("onlineMembers")
-    .innerHTML =
-    online
-      .map(memberHtml)
-      .join("");
-
-  $("offlineMembers")
-    .innerHTML =
-    offline
-      .map(memberHtml)
-      .join("");
-}
-
-function memberHtml(
-  user
-) {
-
-  return `
-    <div class="friend-item">
-
-      ${avatarHtml(
-        user,
-        "friend-avatar"
-      )}
-
-      <div class="friend-info">
-
-        <div class="friend-name">
-          ${escapeHtml(
-            user.displayName
-          )}
-        </div>
-
-        <div class="friend-status">
-          ${
-            user.online
-              ? "En ligne"
-              : "Hors ligne"
-          }
-        </div>
-
-      </div>
-
-    </div>
-  `;
-}
-
-/* ========================================================
-   SOCKET
-======================================================== */
-
-socket.on(
-  "authenticated",
-  data => {
-
-    currentUser =
-      data.user;
-
-    updateMyUserUI();
-  }
-);
-
-socket.on(
-  "auth:error",
-  () => {
-
-    localStorage.removeItem(
-      "novachat_token"
-    );
-
-    token = null;
-
-    location.reload();
-  }
-);
-
-socket.on(
-  "users:update",
-  async () => {
-
-    if (!token)
-      return;
-
-    await loadFriends();
-    await loadServers();
-
-    if (
-      currentServer
-    ) {
-
-      try {
-
-        const data =
-          await api(
-            "/api/servers/" +
-            currentServer.id
-          );
-
-        currentServer =
-          data.server;
-
-        renderChannels();
-
-      } catch {}
-    }
-  }
-);
-
-socket.on(
-  "dm:new",
-  data => {
-
-    if (!currentFriend)
-      return;
-
-    const message =
-      data.message;
-
-    const belongs =
-      (
-        message.senderId ===
-          currentFriend.id &&
-        message.receiverId ===
-          currentUser.id
-      ) ||
-      (
-        message.senderId ===
-          currentUser.id &&
-        message.receiverId ===
-          currentFriend.id
-      );
-
-    if (!belongs)
-      return;
-
-    if (
-      !messages.querySelector(
-        ".message"
-      )
-    ) {
-      messages.innerHTML =
-        "";
-    }
-
-    renderMessage(
-      message
-    );
-
-    scrollMessages();
-  }
-);
-
-socket.on(
-  "server:message",
-  data => {
-
-    if (
-      !currentServer ||
-      !currentChannel
-    )
-      return;
-
-    const message =
-      data.message;
-
-    if (
-      message.serverId !==
-      currentServer.id
-    )
-      return;
-
-    if (
-      message.channelId !==
-      currentChannel.id
-    )
-      return;
-
-    if (
-      messages.querySelector(
-        ".empty"
-      )
-    ) {
-      messages.innerHTML =
-        "";
-    }
-
-    renderServerMessage(
-      message
-    );
-
-    scrollMessages();
-  }
-);
-
-/* ========================================================
-   WEBRTC SIGNALING
-======================================================== */
-
-socket.on(
-  "webrtc:offer",
-  async data => {
-
-    console.log(
-      "WebRTC offer reçue",
-      data
-    );
-  }
-);
-
-socket.on(
-  "webrtc:answer",
-  async data => {
-
-    console.log(
-      "WebRTC answer reçue",
-      data
-    );
-  }
-);
-
-socket.on(
-  "webrtc:ice",
-  async data => {
-
-    console.log(
-      "ICE reçue",
-      data
-    );
-  }
-);
-
-/* ========================================================
-   CALL BUTTONS
-======================================================== */
-
-$("callButton")
-  .addEventListener(
-    "click",
-    async () => {
-
-      if (!currentFriend)
-        return;
-
-      try {
-
-        await navigator
-          .mediaDevices
-          .getUserMedia({
-            audio: true
-          });
-
-        showToast(
-          "Microphone activé. L'appel vocal peut commencer."
-        );
-
-      } catch {
-
-        showToast(
-          "Autorisation microphone refusée."
-        );
-      }
-    }
-  );
-
-$("videoButton")
-  .addEventListener(
-    "click",
-    async () => {
-
-      if (!currentFriend)
-        return;
-
-      try {
-
-        await navigator
-          .mediaDevices
-          .getUserMedia({
-            audio: true,
-            video: true
-          });
-
-        showToast(
-          "Caméra et microphone activés."
-        );
-
-      } catch {
-
-        showToast(
-          "Autorisation caméra/microphone refusée."
-        );
-      }
-    }
-  );
-
-/* ========================================================
-   UTILITY
-======================================================== */
-
-function scrollMessages() {
-
-  messages.scrollTop =
-    messages.scrollHeight;
-}
-
-/* ========================================================
-   START
-======================================================== */
-
-updateAuthUI();
-
-if (token) {
-
-  loadCurrentUser();
-
-} else {
-
-  loginScreen.classList.remove(
-    "hidden"
-  );
-
-  app.classList.add(
-    "hidden"
-  );
-}
-
-</script>
+  </script>
 
 </body>
 </html>
+```
