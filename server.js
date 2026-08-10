@@ -1,9 +1,9 @@
 const express = require("express");
 const http = require("http");
-const path = require("path");
-const fs = require("fs");
-const crypto = require("crypto");
 const { Server } = require("socket.io");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
 
 const app = express();
 const server = http.createServer(app);
@@ -11,1304 +11,971 @@ const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
 
-const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "data");
-const DATA_FILE = path.join(DATA_DIR, "database.json");
-
-app.use(express.json({ limit: "8mb" }));
-app.use(express.urlencoded({ extended: true, limit: "8mb" }));
-app.use(express.static(PUBLIC_DIR));
+const DB_FILE = path.join(DATA_DIR, "database.json");
 
 if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-function defaultDatabase() {
-  return {
-    users: [],
-    servers: [],
-    messages: [],
-    friendships: []
-  };
+let db = {
+    users: {},
+    servers: {},
+    sessions: {},
+    messages: {},
+    friendships: {}
+};
+
+function saveDatabase() {
+    try {
+        fs.writeFileSync(
+            DB_FILE,
+            JSON.stringify(db, null, 2),
+            "utf8"
+        );
+    } catch (error) {
+        console.error("Erreur sauvegarde database:", error);
+    }
 }
 
 function loadDatabase() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) {
-      const db = defaultDatabase();
-      saveDatabase(db);
-      return db;
+    try {
+        if (!fs.existsSync(DB_FILE)) {
+            saveDatabase();
+            return;
+        }
+
+        const content = fs.readFileSync(DB_FILE, "utf8");
+
+        if (!content.trim()) {
+            saveDatabase();
+            return;
+        }
+
+        const parsed = JSON.parse(content);
+
+        db = {
+            users: parsed.users || {},
+            servers: parsed.servers || {},
+            sessions: parsed.sessions || {},
+            messages: parsed.messages || {},
+            friendships: parsed.friendships || {}
+        };
+    } catch (error) {
+        console.error("Erreur chargement database:", error);
     }
-
-    const raw = fs.readFileSync(DATA_FILE, "utf8");
-
-    if (!raw.trim()) {
-      return defaultDatabase();
-    }
-
-    return JSON.parse(raw);
-  } catch (error) {
-    console.error("Erreur lecture database:", error);
-    return defaultDatabase();
-  }
 }
 
-let db = loadDatabase();
+loadDatabase();
 
-function saveDatabase() {
-  try {
-    fs.writeFileSync(
-      DATA_FILE,
-      JSON.stringify(db, null, 2),
-      "utf8"
-    );
-  } catch (error) {
-    console.error("Erreur sauvegarde database:", error);
-  }
-}
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+app.use(express.static(path.join(__dirname, "public")));
 
 function id() {
-  return crypto.randomUUID();
+    return crypto.randomUUID();
 }
 
-function hashPassword(password) {
-  return crypto
-    .createHash("sha256")
-    .update(String(password))
-    .digest("hex");
+function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
+    const hash = crypto
+        .createHash("sha256")
+        .update(salt + password)
+        .digest("hex");
+
+    return `${salt}:${hash}`;
+}
+
+function checkPassword(password, stored) {
+    if (!stored || !stored.includes(":")) {
+        return false;
+    }
+
+    const [salt, originalHash] = stored.split(":");
+
+    const hash = crypto
+        .createHash("sha256")
+        .update(salt + password)
+        .digest("hex");
+
+    return hash === originalHash;
 }
 
 function cleanUser(user) {
-  if (!user) return null;
+    if (!user) return null;
 
-  return {
-    id: user.id,
-    email: user.email,
-    username: user.username,
-    displayName: user.displayName,
-    avatar: user.avatar || "",
-    createdAt: user.createdAt
-  };
+    return {
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        email: user.email,
+        avatar: user.avatar || null,
+        createdAt: user.createdAt
+    };
 }
 
-function getUser(userId) {
-  return db.users.find(user => user.id === userId);
+function getUserByUsername(username) {
+    const lower = username.toLowerCase();
+
+    return Object.values(db.users).find(
+        user => user.username.toLowerCase() === lower
+    );
 }
 
-function findUserByUsername(username) {
-  const wanted = String(username || "")
-    .trim()
-    .toLowerCase();
+function getUserFromToken(token) {
+    if (!token) return null;
 
-  return db.users.find(
-    user =>
-      user.username.toLowerCase() === wanted
-  );
+    const session = db.sessions[token];
+
+    if (!session) return null;
+
+    return db.users[session.userId] || null;
 }
 
-function findUserByLogin(login) {
-  const wanted = String(login || "")
-    .trim()
-    .toLowerCase();
+function requireUser(req, res) {
+    const user = getUserFromToken(req.headers.authorization);
 
-  return db.users.find(
-    user =>
-      user.username.toLowerCase() === wanted ||
-      user.email.toLowerCase() === wanted
-  );
+    if (!user) {
+        res.status(401).json({
+            error: "Non connecté"
+        });
+
+        return null;
+    }
+
+    return user;
 }
 
-function getFriends(userId) {
-  const relations = db.friendships.filter(
-    relation =>
-      relation.userId === userId ||
-      relation.friendId === userId
-  );
+function createDefaultServer(ownerId, name) {
+    const serverId = id();
 
-  const ids = relations.map(relation =>
-    relation.userId === userId
-      ? relation.friendId
-      : relation.userId
-  );
+    db.servers[serverId] = {
+        id: serverId,
+        name: name || "Mon serveur",
+        icon: null,
+        ownerId,
+        members: [ownerId],
+        channels: [
+            {
+                id: id(),
+                name: "general",
+                type: "text"
+            },
+            {
+                id: id(),
+                name: "general",
+                type: "voice"
+            }
+        ],
+        createdAt: Date.now()
+    };
 
-  return ids
-    .map(getUser)
-    .filter(Boolean)
-    .map(cleanUser);
-}
-
-function getServerForUser(serverId, userId) {
-  const serverData = db.servers.find(
-    serverItem => serverItem.id === serverId
-  );
-
-  if (!serverData) return null;
-
-  if (!serverData.members.includes(userId)) {
-    return null;
-  }
-
-  return serverData;
+    return db.servers[serverId];
 }
 
 function publicServer(serverData) {
-  return {
-    id: serverData.id,
-    name: serverData.name,
-    icon: serverData.icon || "",
-    ownerId: serverData.ownerId,
-    members: serverData.members,
-    channels: serverData.channels
-  };
-}
-
-function makeServer(name, icon, ownerId) {
-  const serverId = id();
-
-  return {
-    id: serverId,
-    name,
-    icon: icon || "",
-    ownerId,
-    members: [ownerId],
-    channels: [
-      {
-        id: id(),
-        name: "général",
-        type: "text"
-      },
-      {
-        id: id(),
-        name: "Général",
-        type: "voice"
-      }
-    ],
-    createdAt: Date.now()
-  };
-}
-
-function getServersForUser(userId) {
-  return db.servers
-    .filter(serverItem =>
-      serverItem.members.includes(userId)
-    )
-    .map(publicServer);
-}
-
-function getMessagesForChannel(channelId) {
-  return db.messages
-    .filter(message =>
-      message.channelId === channelId
-    )
-    .sort(
-      (a, b) =>
-        a.createdAt - b.createdAt
-    );
-}
-
-function getDmMessages(userA, userB) {
-  return db.messages
-    .filter(message =>
-      message.type === "dm" &&
-      (
-        (
-          message.from === userA &&
-          message.to === userB
-        ) ||
-        (
-          message.from === userB &&
-          message.to === userA
-        )
-      )
-    )
-    .sort(
-      (a, b) =>
-        a.createdAt - b.createdAt
-    );
-}
-
-function messageForClient(message) {
-  const user = getUser(message.from);
-
-  return {
-    ...message,
-    displayName: user
-      ? user.displayName
-      : "Utilisateur",
-    username: user
-      ? user.username
-      : "",
-    avatar: user
-      ? user.avatar || ""
-      : ""
-  };
-}
-
-const onlineUsers = new Map();
-const voiceRooms = new Map();
-
-function sendVoiceUsers(channelId) {
-  const room = voiceRooms.get(channelId);
-
-  if (!room) {
-    return;
-  }
-
-  const users = [];
-
-  for (const socketId of room) {
-    const info = onlineUsers.get(socketId);
-
-    if (!info) continue;
-
-    const user = getUser(info.userId);
-
-    if (!user) continue;
-
-    users.push({
-      socketId,
-      user: cleanUser(user)
-    });
-  }
-
-  io.to("voice:" + channelId).emit(
-    "voice_users",
-    {
-      channelId,
-      users
-    }
-  );
-}
-
-function leaveVoice(socket) {
-  const currentVoice =
-    socket.data.voiceChannelId;
-
-  if (!currentVoice) {
-    return;
-  }
-
-  const room = voiceRooms.get(
-    currentVoice
-  );
-
-  if (room) {
-    room.delete(socket.id);
-
-    if (room.size === 0) {
-      voiceRooms.delete(currentVoice);
-    }
-  }
-
-  socket.leave(
-    "voice:" + currentVoice
-  );
-
-  socket.to(
-    "voice:" + currentVoice
-  ).emit(
-    "voice_user_left",
-    {
-      socketId: socket.id
-    }
-  );
-
-  sendVoiceUsers(currentVoice);
-
-  socket.data.voiceChannelId = null;
+    return {
+        id: serverData.id,
+        name: serverData.name,
+        icon: serverData.icon || null,
+        ownerId: serverData.ownerId,
+        members: serverData.members,
+        channels: serverData.channels
+    };
 }
 
 /* =========================
-   API
+   API AUTH
 ========================= */
 
-app.get("/api/health", (req, res) => {
-  res.json({
-    ok: true,
-    service: "NovaChat",
-    time: Date.now()
-  });
-});
-
-/* INSCRIPTION */
-
 app.post("/api/register", (req, res) => {
-  try {
-    const email = String(
-      req.body.email || ""
-    ).trim();
+    try {
+        const {
+            email,
+            password,
+            username,
+            displayName
+        } = req.body;
 
-    const username = String(
-      req.body.username || ""
-    ).trim();
+        if (!email || !password || !username) {
+            return res.status(400).json({
+                error: "Email, mot de passe et nom d'utilisateur sont obligatoires."
+            });
+        }
 
-    const displayName = String(
-      req.body.displayName ||
-      username
-    ).trim();
+        if (password.length < 6) {
+            return res.status(400).json({
+                error: "Le mot de passe doit contenir au moins 6 caractères."
+            });
+        }
 
-    const password = String(
-      req.body.password || ""
-    );
+        if (!/^[a-zA-Z0-9_.-]{3,24}$/.test(username)) {
+            return res.status(400).json({
+                error: "Nom d'utilisateur invalide."
+            });
+        }
 
-    if (!email || !username || !password) {
-      return res.status(400).json({
-        ok: false,
-        error:
-          "L'email, le nom d'utilisateur et le mot de passe sont obligatoires."
-      });
+        if (getUserByUsername(username)) {
+            return res.status(400).json({
+                error: "Ce nom d'utilisateur existe déjà."
+            });
+        }
+
+        const emailExists = Object.values(db.users).some(
+            user => user.email.toLowerCase() === email.toLowerCase()
+        );
+
+        if (emailExists) {
+            return res.status(400).json({
+                error: "Cette adresse email est déjà utilisée."
+            });
+        }
+
+        const userId = id();
+
+        const user = {
+            id: userId,
+            email: email.toLowerCase(),
+            username,
+            displayName: displayName || username,
+            password: hashPassword(password),
+            avatar: null,
+            createdAt: Date.now()
+        };
+
+        db.users[userId] = user;
+        db.friendships[userId] = [];
+
+        createDefaultServer(userId, "Mon serveur");
+
+        const token = id();
+
+        db.sessions[token] = {
+            userId,
+            createdAt: Date.now()
+        };
+
+        saveDatabase();
+
+        res.json({
+            success: true,
+            token,
+            user: cleanUser(user)
+        });
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            error: "Erreur lors de la création du compte."
+        });
     }
-
-    if (password.length < 6) {
-      return res.status(400).json({
-        ok: false,
-        error:
-          "Le mot de passe doit contenir au moins 6 caractères."
-      });
-    }
-
-    if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(username)) {
-      return res.status(400).json({
-        ok: false,
-        error:
-          "Nom d'utilisateur invalide. Utilise 3 à 32 caractères."
-      });
-    }
-
-    if (
-      db.users.some(
-        user =>
-          user.email.toLowerCase() ===
-          email.toLowerCase()
-      )
-    ) {
-      return res.status(400).json({
-        ok: false,
-        error: "Cet email est déjà utilisé."
-      });
-    }
-
-    if (findUserByUsername(username)) {
-      return res.status(400).json({
-        ok: false,
-        error:
-          "Ce nom d'utilisateur est déjà utilisé."
-      });
-    }
-
-    const user = {
-      id: id(),
-      email,
-      username,
-      displayName:
-        displayName || username,
-      passwordHash:
-        hashPassword(password),
-      avatar: "",
-      lastUsernameChange: Date.now(),
-      createdAt: Date.now()
-    };
-
-    db.users.push(user);
-    saveDatabase();
-
-    res.json({
-      ok: true,
-      user: cleanUser(user)
-    });
-  } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      ok: false,
-      error: "Erreur serveur."
-    });
-  }
 });
-
-/* CONNEXION */
 
 app.post("/api/login", (req, res) => {
-  try {
-    const login = String(
-      req.body.login || ""
-    ).trim();
+    try {
+        const { email, password } = req.body;
 
-    const password = String(
-      req.body.password || ""
-    );
+        if (!email || !password) {
+            return res.status(400).json({
+                error: "Email et mot de passe obligatoires."
+            });
+        }
 
-    if (!login || !password) {
-      return res.status(400).json({
-        ok: false,
-        error:
-          "Remplis tous les champs."
-      });
+        const user = Object.values(db.users).find(
+            item => item.email.toLowerCase() === email.toLowerCase()
+        );
+
+        if (!user || !checkPassword(password, user.password)) {
+            return res.status(401).json({
+                error: "Email ou mot de passe incorrect."
+            });
+        }
+
+        const token = id();
+
+        db.sessions[token] = {
+            userId: user.id,
+            createdAt: Date.now()
+        };
+
+        saveDatabase();
+
+        res.json({
+            success: true,
+            token,
+            user: cleanUser(user)
+        });
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            error: "Erreur lors de la connexion."
+        });
     }
+});
 
-    const user =
-      findUserByLogin(login);
+app.get("/api/me", (req, res) => {
+    const user = getUserFromToken(req.headers.authorization);
 
-    if (
-      !user ||
-      user.passwordHash !==
-        hashPassword(password)
-    ) {
-      return res.status(401).json({
-        ok: false,
-        error:
-          "Identifiants incorrects."
-      });
+    if (!user) {
+        return res.status(401).json({
+            error: "Non connecté"
+        });
     }
 
     res.json({
-      ok: true,
-      user: cleanUser(user)
+        user: cleanUser(user)
     });
-  } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      ok: false,
-      error: "Erreur serveur."
-    });
-  }
 });
 
-/* AMIS */
+app.post("/api/logout", (req, res) => {
+    const token = req.headers.authorization;
 
-app.get("/api/friends/:userId", (req, res) => {
-  const user = getUser(req.params.userId);
+    if (token) {
+        delete db.sessions[token];
+        saveDatabase();
+    }
 
-  if (!user) {
-    return res.status(404).json({
-      ok: false,
-      error: "Utilisateur introuvable."
+    res.json({
+        success: true
     });
-  }
+});
 
-  res.json({
-    ok: true,
-    friends: getFriends(user.id)
-  });
+/* =========================
+   PROFIL
+========================= */
+
+app.post("/api/profile", (req, res) => {
+    const user = requireUser(req, res);
+
+    if (!user) return;
+
+    const {
+        displayName,
+        avatar
+    } = req.body;
+
+    if (displayName !== undefined) {
+        const value = String(displayName).trim();
+
+        if (!value || value.length > 32) {
+            return res.status(400).json({
+                error: "Nom d'affichage invalide."
+            });
+        }
+
+        user.displayName = value;
+    }
+
+    if (avatar !== undefined) {
+        if (avatar !== null && typeof avatar !== "string") {
+            return res.status(400).json({
+                error: "Avatar invalide."
+            });
+        }
+
+        user.avatar = avatar;
+    }
+
+    saveDatabase();
+
+    io.emit("user:updated", cleanUser(user));
+
+    res.json({
+        success: true,
+        user: cleanUser(user)
+    });
+});
+
+/* =========================
+   AMIS
+========================= */
+
+app.get("/api/friends", (req, res) => {
+    const user = requireUser(req, res);
+
+    if (!user) return;
+
+    const ids = db.friendships[user.id] || [];
+
+    const friends = ids
+        .map(friendId => db.users[friendId])
+        .filter(Boolean)
+        .map(cleanUser);
+
+    res.json({
+        friends
+    });
 });
 
 app.post("/api/friends/add", (req, res) => {
-  const userId = String(
-    req.body.userId || ""
-  );
+    const user = requireUser(req, res);
 
-  const username = String(
-    req.body.username || ""
-  ).trim();
+    if (!user) return;
 
-  const user = getUser(userId);
-  const friend =
-    findUserByUsername(username);
+    const username = String(req.body.username || "").trim();
 
-  if (!user || !friend) {
-    return res.status(404).json({
-      ok: false,
-      error:
-        "Utilisateur introuvable."
-    });
-  }
-
-  if (user.id === friend.id) {
-    return res.status(400).json({
-      ok: false,
-      error:
-        "Tu ne peux pas t'ajouter toi-même."
-    });
-  }
-
-  const exists =
-    db.friendships.some(
-      relation =>
-        (
-          relation.userId === user.id &&
-          relation.friendId === friend.id
-        ) ||
-        (
-          relation.userId === friend.id &&
-          relation.friendId === user.id
-        )
-    );
-
-  if (exists) {
-    return res.status(400).json({
-      ok: false,
-      error:
-        "Cette personne est déjà dans tes amis."
-    });
-  }
-
-  db.friendships.push({
-    id: id(),
-    userId: user.id,
-    friendId: friend.id,
-    createdAt: Date.now()
-  });
-
-  saveDatabase();
-
-  for (const [
-    socketId,
-    info
-  ] of onlineUsers.entries()) {
-    if (
-      info.userId === user.id ||
-      info.userId === friend.id
-    ) {
-      io.to(socketId).emit(
-        "friend_added",
-        {
-          userId: user.id,
-          friendId: friend.id
-        }
-      );
-    }
-  }
-
-  res.json({
-    ok: true,
-    friend: cleanUser(friend)
-  });
-});
-
-/* MP */
-
-app.get(
-  "/api/dm/:userId/:friendId",
-  (req, res) => {
-    const userId =
-      req.params.userId;
-
-    const friendId =
-      req.params.friendId;
-
-    if (
-      !getUser(userId) ||
-      !getUser(friendId)
-    ) {
-      return res.status(404).json({
-        ok: false,
-        error:
-          "Utilisateur introuvable."
-      });
+    if (!username) {
+        return res.status(400).json({
+            error: "Entre un nom d'utilisateur."
+        });
     }
 
-    res.json({
-      ok: true,
-      messages:
-        getDmMessages(
-          userId,
-          friendId
-        ).map(messageForClient)
-    });
-  }
-);
+    const target = getUserByUsername(username);
 
-/* SERVEURS */
-
-app.get(
-  "/api/servers/:userId",
-  (req, res) => {
-    const user = getUser(
-      req.params.userId
-    );
-
-    if (!user) {
-      return res.status(404).json({
-        ok: false,
-        error: "Utilisateur introuvable."
-      });
+    if (!target) {
+        return res.status(404).json({
+            error: "Utilisateur introuvable."
+        });
     }
 
-    res.json({
-      ok: true,
-      servers:
-        getServersForUser(user.id)
-    });
-  }
-);
-
-app.post("/api/servers", (req, res) => {
-  const ownerId = String(
-    req.body.ownerId || ""
-  );
-
-  const name = String(
-    req.body.name || ""
-  ).trim();
-
-  const icon = String(
-    req.body.icon || ""
-  );
-
-  const owner = getUser(ownerId);
-
-  if (!owner) {
-    return res.status(401).json({
-      ok: false,
-      error:
-        "Utilisateur invalide."
-    });
-  }
-
-  if (!name) {
-    return res.status(400).json({
-      ok: false,
-      error:
-        "Le serveur doit avoir un nom."
-    });
-  }
-
-  const serverData =
-    makeServer(
-      name,
-      icon,
-      owner.id
-    );
-
-  db.servers.push(serverData);
-  saveDatabase();
-
-  res.json({
-    ok: true,
-    server:
-      publicServer(serverData)
-  });
-});
-
-app.post(
-  "/api/servers/join",
-  (req, res) => {
-    const userId = String(
-      req.body.userId || ""
-    );
-
-    const serverId = String(
-      req.body.serverId || ""
-    );
-
-    const user = getUser(userId);
-    const serverData =
-      db.servers.find(
-        item => item.id === serverId
-      );
-
-    if (!user || !serverData) {
-      return res.status(404).json({
-        ok: false,
-        error:
-          "Serveur ou utilisateur introuvable."
-      });
+    if (target.id === user.id) {
+        return res.status(400).json({
+            error: "Tu ne peux pas t'ajouter toi-même."
+        });
     }
 
-    if (
-      !serverData.members.includes(
-        user.id
-      )
-    ) {
-      serverData.members.push(
-        user.id
-      );
-
-      saveDatabase();
+    if (!db.friendships[user.id]) {
+        db.friendships[user.id] = [];
     }
 
-    res.json({
-      ok: true,
-      server:
-        publicServer(serverData)
-    });
-  }
-);
-
-/* MESSAGES SALON */
-
-app.get(
-  "/api/channels/:channelId/messages",
-  (req, res) => {
-    const channelId =
-      req.params.channelId;
-
-    res.json({
-      ok: true,
-      messages:
-        getMessagesForChannel(
-          channelId
-        ).map(messageForClient)
-    });
-  }
-);
-
-/* PROFIL */
-
-app.post(
-  "/api/profile",
-  (req, res) => {
-    const userId = String(
-      req.body.userId || ""
-    );
-
-    const user = getUser(userId);
-
-    if (!user) {
-      return res.status(404).json({
-        ok: false,
-        error:
-          "Utilisateur introuvable."
-      });
+    if (!db.friendships[target.id]) {
+        db.friendships[target.id] = [];
     }
 
-    if (
-      req.body.displayName !==
-      undefined
-    ) {
-      const displayName = String(
-        req.body.displayName
-      ).trim();
-
-      if (displayName) {
-        user.displayName =
-          displayName;
-      }
+    if (!db.friendships[user.id].includes(target.id)) {
+        db.friendships[user.id].push(target.id);
     }
 
-    if (
-      req.body.avatar !==
-      undefined
-    ) {
-      user.avatar =
-        String(req.body.avatar || "");
+    if (!db.friendships[target.id].includes(user.id)) {
+        db.friendships[target.id].push(user.id);
     }
 
     saveDatabase();
 
-    io.emit(
-      "user_updated",
-      cleanUser(user)
-    );
+    res.json({
+        success: true,
+        friend: cleanUser(target)
+    });
+});
+
+/* =========================
+   SERVEURS
+========================= */
+
+app.get("/api/servers", (req, res) => {
+    const user = requireUser(req, res);
+
+    if (!user) return;
+
+    const servers = Object.values(db.servers)
+        .filter(serverData =>
+            serverData.members.includes(user.id)
+        )
+        .map(publicServer);
 
     res.json({
-      ok: true,
-      user: cleanUser(user)
+        servers
     });
-  }
-);
+});
 
-/* NOM UTILISATEUR */
+app.post("/api/servers", (req, res) => {
+    const user = requireUser(req, res);
 
-app.post(
-  "/api/username",
-  (req, res) => {
-    const userId = String(
-      req.body.userId || ""
-    );
+    if (!user) return;
 
-    const username = String(
-      req.body.username || ""
-    ).trim();
+    const name = String(req.body.name || "").trim();
 
-    const user = getUser(userId);
-
-    if (!user) {
-      return res.status(404).json({
-        ok: false,
-        error:
-          "Utilisateur introuvable."
-      });
+    if (!name) {
+        return res.status(400).json({
+            error: "Nom du serveur obligatoire."
+        });
     }
 
-    if (
-      !/^[a-zA-Z0-9_.-]{3,32}$/.test(
-        username
-      )
-    ) {
-      return res.status(400).json({
-        ok: false,
-        error:
-          "Nom d'utilisateur invalide."
-      });
+    if (name.length > 50) {
+        return res.status(400).json({
+            error: "Nom du serveur trop long."
+        });
     }
 
-    if (
-      username.toLowerCase() !==
-      user.username.toLowerCase()
-    ) {
-      const existing =
-        findUserByUsername(username);
+    const serverData = createDefaultServer(user.id, name);
 
-      if (
-        existing &&
-        existing.id !== user.id
-      ) {
-        return res.status(400).json({
-          ok: false,
-          error:
-            "Ce nom d'utilisateur est déjà pris."
+    saveDatabase();
+
+    res.json({
+        success: true,
+        server: publicServer(serverData)
+    });
+});
+
+app.post("/api/servers/join", (req, res) => {
+    const user = requireUser(req, res);
+
+    if (!user) return;
+
+    const serverId = String(req.body.serverId || "");
+
+    const serverData = db.servers[serverId];
+
+    if (!serverData) {
+        return res.status(404).json({
+            error: "Serveur introuvable."
         });
-      }
+    }
 
-      const twoWeeks =
-        14 * 24 * 60 * 60 * 1000;
-
-      if (
-        user.lastUsernameChange &&
-        Date.now() -
-          user.lastUsernameChange <
-          twoWeeks
-      ) {
-        const remaining =
-          twoWeeks -
-          (
-            Date.now() -
-            user.lastUsernameChange
-          );
-
-        const days = Math.ceil(
-          remaining /
-            (24 * 60 * 60 * 1000)
-        );
-
-        return res.status(400).json({
-          ok: false,
-          error:
-            `Tu dois attendre encore ${days} jour(s) avant de changer ton nom d'utilisateur.`
-        });
-      }
-
-      user.username =
-        username;
-
-      user.lastUsernameChange =
-        Date.now();
-
-      saveDatabase();
-
-      io.emit(
-        "user_updated",
-        cleanUser(user)
-      );
+    if (!serverData.members.includes(user.id)) {
+        serverData.members.push(user.id);
+        saveDatabase();
     }
 
     res.json({
-      ok: true,
-      user: cleanUser(user)
+        success: true,
+        server: publicServer(serverData)
     });
-  }
-);
+});
 
-/* PAGE */
+app.post("/api/servers/:serverId/channels", (req, res) => {
+    const user = requireUser(req, res);
 
-app.get("*", (req, res) => {
-  res.sendFile(
-    path.join(
-      PUBLIC_DIR,
-      "index.html"
-    )
-  );
+    if (!user) return;
+
+    const serverData = db.servers[req.params.serverId];
+
+    if (!serverData) {
+        return res.status(404).json({
+            error: "Serveur introuvable."
+        });
+    }
+
+    if (!serverData.members.includes(user.id)) {
+        return res.status(403).json({
+            error: "Tu n'es pas membre de ce serveur."
+        });
+    }
+
+    if (serverData.ownerId !== user.id) {
+        return res.status(403).json({
+            error: "Seul le propriétaire peut créer un salon."
+        });
+    }
+
+    const name = String(req.body.name || "").trim();
+    const type = req.body.type === "voice" ? "voice" : "text";
+
+    if (!name) {
+        return res.status(400).json({
+            error: "Nom du salon obligatoire."
+        });
+    }
+
+    const channel = {
+        id: id(),
+        name,
+        type
+    };
+
+    serverData.channels.push(channel);
+
+    saveDatabase();
+
+    res.json({
+        success: true,
+        channel
+    });
+});
+
+/* =========================
+   MESSAGES
+========================= */
+
+app.get("/api/dm/:userId", (req, res) => {
+    const user = requireUser(req, res);
+
+    if (!user) return;
+
+    const targetId = req.params.userId;
+
+    if (!db.users[targetId]) {
+        return res.status(404).json({
+            error: "Utilisateur introuvable."
+        });
+    }
+
+    const key = [user.id, targetId].sort().join("_");
+
+    res.json({
+        messages: db.messages[key] || []
+    });
+});
+
+app.post("/api/dm/:userId", (req, res) => {
+    const user = requireUser(req, res);
+
+    if (!user) return;
+
+    const targetId = req.params.userId;
+    const content = String(req.body.content || "").trim();
+
+    if (!db.users[targetId]) {
+        return res.status(404).json({
+            error: "Utilisateur introuvable."
+        });
+    }
+
+    if (!content) {
+        return res.status(400).json({
+            error: "Message vide."
+        });
+    }
+
+    if (content.length > 2000) {
+        return res.status(400).json({
+            error: "Message trop long."
+        });
+    }
+
+    const key = [user.id, targetId].sort().join("_");
+
+    if (!db.messages[key]) {
+        db.messages[key] = [];
+    }
+
+    const message = {
+        id: id(),
+        from: user.id,
+        to: targetId,
+        content,
+        createdAt: Date.now()
+    };
+
+    db.messages[key].push(message);
+
+    saveDatabase();
+
+    io.to(`user:${targetId}`).emit("dm:new", message);
+    io.to(`user:${user.id}`).emit("dm:new", message);
+
+    res.json({
+        success: true,
+        message
+    });
 });
 
 /* =========================
    SOCKET.IO
 ========================= */
 
+const onlineUsers = new Map();
+
 io.on("connection", socket => {
-  console.log(
-    "Connexion:",
-    socket.id
-  );
+    console.log("Connexion Socket.IO:", socket.id);
 
-  socket.on(
-    "identify",
-    userId => {
-      const user =
-        getUser(userId);
+    socket.on("auth", token => {
+        const user = getUserFromToken(token);
 
-      if (!user) return;
-
-      onlineUsers.set(
-        socket.id,
-        {
-          userId
+        if (!user) {
+            socket.emit("auth:error");
+            return;
         }
-      );
 
-      socket.data.userId =
-        userId;
+        socket.userId = user.id;
+        socket.join(`user:${user.id}`);
 
-      socket.broadcast.emit(
-        "presence",
-        {
-          userId,
-          online: true
+        onlineUsers.set(user.id, socket.id);
+
+        io.emit("presence:update", {
+            userId: user.id,
+            online: true
+        });
+    });
+
+    /* DM */
+
+    socket.on("dm:send", data => {
+        if (!socket.userId) return;
+
+        const targetId = String(data?.targetId || "");
+        const content = String(data?.content || "").trim();
+
+        if (!targetId || !content) return;
+
+        const user = db.users[socket.userId];
+        const target = db.users[targetId];
+
+        if (!user || !target) return;
+
+        const key = [user.id, target.id].sort().join("_");
+
+        if (!db.messages[key]) {
+            db.messages[key] = [];
         }
-      );
-    }
-  );
 
-  /* MP */
+        const message = {
+            id: id(),
+            from: user.id,
+            to: target.id,
+            content,
+            createdAt: Date.now()
+        };
 
-  socket.on(
-    "dm_send",
-    data => {
-      const sender =
-        getUser(
-          socket.data.userId
-        );
+        db.messages[key].push(message);
+        saveDatabase();
 
-      const recipient =
-        getUser(
-          data.to
-        );
+        io.to(`user:${user.id}`).emit("dm:new", message);
 
-      if (
-        !sender ||
-        !recipient
-      ) {
-        return;
-      }
+        io.to(`user:${target.id}`).emit("dm:new", message);
+    });
 
-      const content =
-        String(
-          data.content || ""
-        ).trim();
+    /* =====================
+       WEBRTC CALL SIGNALING
+    ===================== */
 
-      if (!content) return;
+    socket.on("call:request", data => {
+        if (!socket.userId) return;
 
-      const message = {
-        id: id(),
-        type: "dm",
-        from: sender.id,
-        to: recipient.id,
-        content,
-        createdAt: Date.now()
-      };
+        const targetId = String(data?.targetId || "");
 
-      db.messages.push(message);
-      saveDatabase();
+        if (!targetId) return;
 
-      const output =
-        messageForClient(
-          message
-        );
+        const targetSocket = onlineUsers.get(targetId);
 
-      socket.emit(
-        "dm_message",
-        output
-      );
+        if (!targetSocket) {
+            socket.emit("call:unavailable", {
+                targetId
+            });
 
-      for (const [
-        socketId,
-        info
-      ] of onlineUsers.entries()) {
-        if (
-          info.userId ===
-          recipient.id
-        ) {
-          io.to(socketId).emit(
-            "dm_message",
-            output
-          );
+            return;
         }
-      }
-    }
-  );
 
-  /* SERVEUR */
+        io.to(targetSocket).emit("call:incoming", {
+            fromUser: cleanUser(db.users[socket.userId]),
+            callId: data.callId || id()
+        });
+    });
 
-  socket.on(
-    "server_join",
-    serverId => {
-      const userId =
-        socket.data.userId;
+    socket.on("call:accept", data => {
+        if (!socket.userId) return;
 
-      if (!userId) return;
+        const targetId = String(data?.targetId || "");
+        const targetSocket = onlineUsers.get(targetId);
 
-      const serverData =
-        getServerForUser(
-          serverId,
-          userId
+        if (!targetSocket) return;
+
+        io.to(targetSocket).emit("call:accepted", {
+            fromUser: cleanUser(db.users[socket.userId])
+        });
+    });
+
+    socket.on("call:reject", data => {
+        if (!socket.userId) return;
+
+        const targetId = String(data?.targetId || "");
+        const targetSocket = onlineUsers.get(targetId);
+
+        if (!targetSocket) return;
+
+        io.to(targetSocket).emit("call:rejected", {
+            fromUser: cleanUser(db.users[socket.userId])
+        });
+    });
+
+    socket.on("call:end", data => {
+        if (!socket.userId) return;
+
+        const targetId = String(data?.targetId || "");
+        const targetSocket = onlineUsers.get(targetId);
+
+        if (!targetSocket) return;
+
+        io.to(targetSocket).emit("call:ended", {
+            fromUser: cleanUser(db.users[socket.userId])
+        });
+    });
+
+    /* WebRTC offer */
+
+    socket.on("webrtc:offer", data => {
+        if (!socket.userId) return;
+
+        const targetId = String(data?.targetId || "");
+        const targetSocket = onlineUsers.get(targetId);
+
+        if (!targetSocket) return;
+
+        io.to(targetSocket).emit("webrtc:offer", {
+            fromUserId: socket.userId,
+            offer: data.offer
+        });
+    });
+
+    /* WebRTC answer */
+
+    socket.on("webrtc:answer", data => {
+        if (!socket.userId) return;
+
+        const targetId = String(data?.targetId || "");
+        const targetSocket = onlineUsers.get(targetId);
+
+        if (!targetSocket) return;
+
+        io.to(targetSocket).emit("webrtc:answer", {
+            fromUserId: socket.userId,
+            answer: data.answer
+        });
+    });
+
+    /* ICE */
+
+    socket.on("webrtc:ice", data => {
+        if (!socket.userId) return;
+
+        const targetId = String(data?.targetId || "");
+        const targetSocket = onlineUsers.get(targetId);
+
+        if (!targetSocket) return;
+
+        io.to(targetSocket).emit("webrtc:ice", {
+            fromUserId: socket.userId,
+            candidate: data.candidate
+        });
+    });
+
+    /* =====================
+       VOICE CHANNEL
+    ===================== */
+
+    socket.on("voice:join", data => {
+        if (!socket.userId) return;
+
+        const serverId = String(data?.serverId || "");
+        const channelId = String(data?.channelId || "");
+
+        const serverData = db.servers[serverId];
+
+        if (!serverData) return;
+
+        if (!serverData.members.includes(socket.userId)) {
+            return;
+        }
+
+        const channel = serverData.channels.find(
+            item => item.id === channelId && item.type === "voice"
         );
 
-      if (!serverData) return;
+        if (!channel) return;
 
-      socket.join(
-        "server:" + serverId
-      );
-    }
-  );
+        socket.join(`voice:${channelId}`);
 
-  /* MESSAGE SALON */
+        socket.voiceChannel = channelId;
+        socket.voiceServer = serverId;
 
-  socket.on(
-    "channel_send",
-    data => {
-      const userId =
-        socket.data.userId;
+        const user = cleanUser(db.users[socket.userId]);
 
-      const serverData =
-        getServerForUser(
-          data.serverId,
-          userId
+        socket.to(`voice:${channelId}`).emit(
+            "voice:user-joined",
+            user
         );
 
-      if (!serverData) return;
-
-      const channel =
-        serverData.channels.find(
-          item =>
-            item.id ===
-            data.channelId
+        const room = io.sockets.adapter.rooms.get(
+            `voice:${channelId}`
         );
 
-      if (
-        !channel ||
-        channel.type !==
-          "text"
-      ) {
-        return;
-      }
+        const users = [];
 
-      const content =
-        String(
-          data.content || ""
-        ).trim();
+        if (room) {
+            for (const socketId of room) {
+                const otherSocket = io.sockets.sockets.get(socketId);
 
-      if (!content) return;
+                if (
+                    otherSocket &&
+                    otherSocket.userId &&
+                    otherSocket.userId !== socket.userId
+                ) {
+                    const otherUser = db.users[otherSocket.userId];
 
-      const message = {
-        id: id(),
-        type: "channel",
-        from: userId,
-        serverId:
-          data.serverId,
-        channelId:
-          data.channelId,
-        content,
-        createdAt: Date.now()
-      };
+                    if (otherUser) {
+                        users.push(cleanUser(otherUser));
+                    }
+                }
+            }
+        }
 
-      db.messages.push(message);
-      saveDatabase();
+        socket.emit("voice:users", users);
+    });
 
-      io.to(
-        "server:" +
-          data.serverId
-      ).emit(
-        "channel_message",
-        messageForClient(
-          message
-        )
-      );
-    }
-  );
-
-  /* =====================
-     VOCAL SERVEUR
-  ===================== */
-
-  socket.on(
-    "voice_join",
-    data => {
-      const userId =
-        socket.data.userId;
-
-      const serverData =
-        getServerForUser(
-          data.serverId,
-          userId
-        );
-
-      if (!serverData) return;
-
-      const channel =
-        serverData.channels.find(
-          item =>
-            item.id ===
-            data.channelId
-        );
-
-      if (
-        !channel ||
-        channel.type !==
-          "voice"
-      ) {
-        return;
-      }
-
-      if (
-        socket.data.voiceChannelId
-      ) {
+    socket.on("voice:leave", () => {
         leaveVoice(socket);
-      }
+    });
 
-      const channelId =
-        data.channelId;
+    socket.on("voice:signal", data => {
+        if (!socket.userId) return;
 
-      if (
-        !voiceRooms.has(
-          channelId
-        )
-      ) {
-        voiceRooms.set(
-          channelId,
-          new Set()
-        );
-      }
+        const targetSocketId = String(data?.targetSocketId || "");
 
-      const room =
-        voiceRooms.get(
-          channelId
+        if (!targetSocketId) return;
+
+        const targetSocket = io.sockets.sockets.get(
+            targetSocketId
         );
 
-      const previousUsers =
-        Array.from(room);
+        if (!targetSocket) return;
 
-      room.add(socket.id);
+        targetSocket.emit("voice:signal", {
+            fromSocketId: socket.id,
+            data: data.data
+        });
+    });
 
-      socket.join(
-        "voice:" + channelId
-      );
+    socket.on("disconnect", () => {
+        if (socket.userId) {
+            if (socket.voiceChannel) {
+                leaveVoice(socket);
+            }
 
-      socket.data.voiceChannelId =
-        channelId;
+            onlineUsers.delete(socket.userId);
 
-      socket.data.voiceServerId =
-        data.serverId;
-
-      socket.to(
-        "voice:" + channelId
-      ).emit(
-        "voice_user_joined",
-        {
-          socketId: socket.id
+            io.emit("presence:update", {
+                userId: socket.userId,
+                online: false
+            });
         }
-      );
 
-      socket.emit(
-        "voice_existing_users",
-        {
-          users: previousUsers
-        }
-      );
-
-      sendVoiceUsers(
-        channelId
-      );
-    }
-  );
-
-  socket.on(
-    "voice_leave",
-    () => {
-      leaveVoice(socket);
-    }
-  );
-
-  /* =====================
-     WEBRTC MP + SERVEUR
-  ===================== */
-
-  socket.on(
-    "webrtc_offer",
-    data => {
-      if (!data.target) return;
-
-      io.to(
-        data.target
-      ).emit(
-        "webrtc_offer",
-        {
-          from: socket.id,
-          offer: data.offer
-        }
-      );
-    }
-  );
-
-  socket.on(
-    "webrtc_answer",
-    data => {
-      if (!data.target) return;
-
-      io.to(
-        data.target
-      ).emit(
-        "webrtc_answer",
-        {
-          from: socket.id,
-          answer:
-            data.answer
-        }
-      );
-    }
-  );
-
-  socket.on(
-    "webrtc_ice",
-    data => {
-      if (!data.target) return;
-
-      io.to(
-        data.target
-      ).emit(
-        "webrtc_ice",
-        {
-          from: socket.id,
-          candidate:
-            data.candidate
-        }
-      );
-    }
-  );
-
-  socket.on(
-    "disconnect",
-    () => {
-      const info =
-        onlineUsers.get(
-          socket.id
-        );
-
-      if (
-        socket.data.voiceChannelId
-      ) {
-        leaveVoice(socket);
-      }
-
-      if (info) {
-        socket.broadcast.emit(
-          "presence",
-          {
-            userId:
-              info.userId,
-            online: false
-          }
-        );
-      }
-
-      onlineUsers.delete(
-        socket.id
-      );
-
-      console.log(
-        "Déconnexion:",
-        socket.id
-      );
-    }
-  );
+        console.log("Déconnexion Socket.IO:", socket.id);
+    });
 });
 
-server.listen(
-  PORT,
-  "0.0.0.0",
-  () => {
-    console.log(
-      `NovaChat lancé sur le port ${PORT}`
+function leaveVoice(socket) {
+    const channelId = socket.voiceChannel;
+
+    if (!channelId) return;
+
+    const user = db.users[socket.userId];
+
+    socket.leave(`voice:${channelId}`);
+
+    socket.to(`voice:${channelId}`).emit(
+        "voice:user-left",
+        user ? cleanUser(user) : {
+            id: socket.userId
+        }
     );
-  }
-);
+
+    socket.voiceChannel = null;
+    socket.voiceServer = null;
+}
+
+/*
+ * Express 5 :
+ * NE PAS utiliser app.get("*").
+ *
+ * Cette route fonctionne avec Express 5.
+ */
+app.use((req, res) => {
+    res.sendFile(
+        path.join(__dirname, "public", "index.html")
+    );
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+    console.log(`NovaChat démarré sur le port ${PORT}`);
+});
