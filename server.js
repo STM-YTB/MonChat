@@ -1,981 +1,1650 @@
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io");
+const WebSocket = require("ws");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
+const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "data");
-const DB_FILE = path.join(DATA_DIR, "database.json");
+const ACCOUNTS_FILE = path.join(DATA_DIR, "accounts.json");
+const CHAT_FILE = path.join(DATA_DIR, "chat.json");
 
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+/* =========================================================
+   EXPRESS
+========================================================= */
 
-let db = {
-    users: {},
-    servers: {},
-    sessions: {},
-    messages: {},
-    friendships: {}
-};
+app.use(express.json({ limit: "10mb" }));
+app.use(express.static(PUBLIC_DIR));
 
-function saveDatabase() {
-    try {
-        fs.writeFileSync(
-            DB_FILE,
-            JSON.stringify(db, null, 2),
-            "utf8"
-        );
-    } catch (error) {
-        console.error("Erreur sauvegarde database:", error);
+app.get("/", (req, res) => {
+    res.sendFile(path.join(PUBLIC_DIR, "index.html"));
+});
+
+/* =========================================================
+   DATABASE
+========================================================= */
+
+function ensureDataFolder() {
+    if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
     }
 }
 
-function loadDatabase() {
+function createAccountsDatabase() {
+    return {
+        accounts: []
+    };
+}
+
+function createChatDatabase() {
+    return {
+        channels: {
+            general: []
+        },
+        privateMessages: {},
+        servers: {}
+    };
+}
+
+let accountsDB = createAccountsDatabase();
+let chatDB = createChatDatabase();
+
+/* =========================================================
+   LOAD DATABASE
+========================================================= */
+
+function loadAccounts() {
     try {
-        if (!fs.existsSync(DB_FILE)) {
-            saveDatabase();
+        ensureDataFolder();
+
+        if (!fs.existsSync(ACCOUNTS_FILE)) {
+            accountsDB = createAccountsDatabase();
+            saveAccounts();
             return;
         }
 
-        const content = fs.readFileSync(DB_FILE, "utf8");
+        const content = fs.readFileSync(
+            ACCOUNTS_FILE,
+            "utf8"
+        );
 
         if (!content.trim()) {
-            saveDatabase();
+            accountsDB = createAccountsDatabase();
+            saveAccounts();
             return;
         }
 
         const parsed = JSON.parse(content);
 
-        db = {
-            users: parsed.users || {},
-            servers: parsed.servers || {},
-            sessions: parsed.sessions || {},
-            messages: parsed.messages || {},
-            friendships: parsed.friendships || {}
-        };
+        if (
+            parsed &&
+            Array.isArray(parsed.accounts)
+        ) {
+            accountsDB = parsed;
+        } else {
+            accountsDB = createAccountsDatabase();
+        }
+
     } catch (error) {
-        console.error("Erreur chargement database:", error);
+        console.error(
+            "Erreur chargement comptes :",
+            error
+        );
+
+        accountsDB = createAccountsDatabase();
     }
 }
 
-loadDatabase();
+function loadChat() {
+    try {
+        ensureDataFolder();
 
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+        if (!fs.existsSync(CHAT_FILE)) {
+            chatDB = createChatDatabase();
+            saveChat();
+            return;
+        }
 
-app.use(express.static(path.join(__dirname, "public")));
+        const content = fs.readFileSync(
+            CHAT_FILE,
+            "utf8"
+        );
 
-function id() {
-    return crypto.randomUUID();
+        if (!content.trim()) {
+            chatDB = createChatDatabase();
+            saveChat();
+            return;
+        }
+
+        const parsed = JSON.parse(content);
+
+        chatDB = {
+            ...createChatDatabase(),
+            ...parsed
+        };
+
+        if (!chatDB.channels) {
+            chatDB.channels = {
+                general: []
+            };
+        }
+
+        if (!chatDB.channels.general) {
+            chatDB.channels.general = [];
+        }
+
+        if (!chatDB.privateMessages) {
+            chatDB.privateMessages = {};
+        }
+
+        if (!chatDB.servers) {
+            chatDB.servers = {};
+        }
+
+    } catch (error) {
+        console.error(
+            "Erreur chargement chat :",
+            error
+        );
+
+        chatDB = createChatDatabase();
+    }
 }
 
-function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
-    const hash = crypto
-        .createHash("sha256")
-        .update(salt + password)
-        .digest("hex");
+function saveAccounts() {
+    try {
+        ensureDataFolder();
 
-    return `${salt}:${hash}`;
+        fs.writeFileSync(
+            ACCOUNTS_FILE,
+            JSON.stringify(
+                accountsDB,
+                null,
+                2
+            ),
+            "utf8"
+        );
+    } catch (error) {
+        console.error(
+            "Erreur sauvegarde comptes :",
+            error
+        );
+    }
 }
 
-function checkPassword(password, stored) {
-    if (!stored || !stored.includes(":")) {
+function saveChat() {
+    try {
+        ensureDataFolder();
+
+        fs.writeFileSync(
+            CHAT_FILE,
+            JSON.stringify(
+                chatDB,
+                null,
+                2
+            ),
+            "utf8"
+        );
+    } catch (error) {
+        console.error(
+            "Erreur sauvegarde chat :",
+            error
+        );
+    }
+}
+
+/*
+IMPORTANT :
+Les variables sont créées AVANT le chargement.
+*/
+
+loadAccounts();
+loadChat();
+
+/* =========================================================
+   PASSWORD
+========================================================= */
+
+function hashPassword(password) {
+    const salt =
+        crypto.randomBytes(16).toString("hex");
+
+    const hash =
+        crypto.scryptSync(
+            String(password),
+            salt,
+            64
+        ).toString("hex");
+
+    return salt + ":" + hash;
+}
+
+function verifyPassword(
+    password,
+    storedPassword
+) {
+    try {
+        const parts =
+            String(storedPassword).split(":");
+
+        if (parts.length !== 2) {
+            return false;
+        }
+
+        const salt = parts[0];
+        const originalHash = parts[1];
+
+        const hash =
+            crypto.scryptSync(
+                String(password),
+                salt,
+                64
+            ).toString("hex");
+
+        const a = Buffer.from(
+            hash,
+            "hex"
+        );
+
+        const b = Buffer.from(
+            originalHash,
+            "hex"
+        );
+
+        if (a.length !== b.length) {
+            return false;
+        }
+
+        return crypto.timingSafeEqual(
+            a,
+            b
+        );
+
+    } catch (error) {
         return false;
     }
-
-    const [salt, originalHash] = stored.split(":");
-
-    const hash = crypto
-        .createHash("sha256")
-        .update(salt + password)
-        .digest("hex");
-
-    return hash === originalHash;
 }
 
-function cleanUser(user) {
-    if (!user) return null;
+/* =========================================================
+   HELPERS
+========================================================= */
 
-    return {
-        id: user.id,
-        username: user.username,
-        displayName: user.displayName,
-        email: user.email,
-        avatar: user.avatar || null,
-        createdAt: user.createdAt
-    };
-}
-
-function getUserByUsername(username) {
-    const lower = username.toLowerCase();
-
-    return Object.values(db.users).find(
-        user => user.username.toLowerCase() === lower
+function makeId(prefix) {
+    return (
+        prefix +
+        "_" +
+        crypto.randomBytes(12).toString("hex")
     );
 }
 
-function getUserFromToken(token) {
-    if (!token) return null;
-
-    const session = db.sessions[token];
-
-    if (!session) return null;
-
-    return db.users[session.userId] || null;
+function cleanText(value, max = 100) {
+    return String(value || "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .substring(0, max);
 }
 
-function requireUser(req, res) {
-    const user = getUserFromToken(req.headers.authorization);
+function normalizeEmail(email) {
+    return String(email || "")
+        .trim()
+        .toLowerCase();
+}
 
-    if (!user) {
-        res.status(401).json({
-            error: "Non connecté"
-        });
+function normalizeUsername(username) {
+    return cleanText(username, 32)
+        .toLowerCase();
+}
 
-        return null;
+function displayNameFromUsername(username) {
+    return cleanText(username, 32);
+}
+
+function getAvatar(username) {
+    const name = cleanText(username);
+
+    if (!name) {
+        return "?";
     }
 
-    return user;
+    return name.charAt(0).toUpperCase();
 }
 
-function createDefaultServer(ownerId, name) {
-    const serverId = id();
+/* =========================================================
+   ACCOUNT HELPERS
+========================================================= */
 
-    db.servers[serverId] = {
-        id: serverId,
-        name: name || "Mon serveur",
-        icon: null,
-        ownerId,
-        members: [ownerId],
-        channels: [
-            {
-                id: id(),
-                name: "general",
-                type: "text"
-            },
-            {
-                id: id(),
-                name: "general",
-                type: "voice"
-            }
-        ],
-        createdAt: Date.now()
-    };
+function findAccountByEmail(email) {
+    const normalized =
+        normalizeEmail(email);
 
-    return db.servers[serverId];
+    return accountsDB.accounts.find(
+        account =>
+            account.email === normalized
+    );
 }
 
-function publicServer(serverData) {
+function findAccountByUsername(username) {
+    const normalized =
+        normalizeUsername(username);
+
+    return accountsDB.accounts.find(
+        account =>
+            account.username === normalized
+    );
+}
+
+function publicAccount(account) {
     return {
-        id: serverData.id,
-        name: serverData.name,
-        icon: serverData.icon || null,
-        ownerId: serverData.ownerId,
-        members: serverData.members,
-        channels: serverData.channels
+        id: account.id,
+        email: account.email,
+        username: account.username,
+        displayName:
+            account.displayName,
+        avatar:
+            account.avatar,
+        createdAt:
+            account.createdAt
     };
 }
 
-/* =========================
-   API AUTH
-========================= */
+/* =========================================================
+   HTTP ACCOUNT API
+========================================================= */
+
+/*
+CREATE ACCOUNT
+*/
 
 app.post("/api/register", (req, res) => {
     try {
-        const {
-            email,
-            password,
-            username,
-            displayName
-        } = req.body;
+        const email =
+            normalizeEmail(req.body.email);
 
-        if (!email || !password || !username) {
+        const password =
+            String(req.body.password || "");
+
+        const username =
+            cleanText(
+                req.body.username,
+                32
+            );
+
+        if (!email) {
             return res.status(400).json({
-                error: "Email, mot de passe et nom d'utilisateur sont obligatoires."
+                success: false,
+                error:
+                    "L'email est obligatoire."
+            });
+        }
+
+        if (!password) {
+            return res.status(400).json({
+                success: false,
+                error:
+                    "Le mot de passe est obligatoire."
             });
         }
 
         if (password.length < 6) {
             return res.status(400).json({
-                error: "Le mot de passe doit contenir au moins 6 caractères."
+                success: false,
+                error:
+                    "Le mot de passe doit contenir au moins 6 caractères."
             });
         }
 
-        if (!/^[a-zA-Z0-9_.-]{3,24}$/.test(username)) {
+        if (!username) {
             return res.status(400).json({
-                error: "Nom d'utilisateur invalide."
+                success: false,
+                error:
+                    "Le nom d'utilisateur est obligatoire."
             });
         }
 
-        if (getUserByUsername(username)) {
+        if (
+            !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+                email
+            )
+        ) {
             return res.status(400).json({
-                error: "Ce nom d'utilisateur existe déjà."
+                success: false,
+                error:
+                    "Adresse email invalide."
             });
         }
 
-        const emailExists = Object.values(db.users).some(
-            user => user.email.toLowerCase() === email.toLowerCase()
+        if (findAccountByEmail(email)) {
+            return res.status(409).json({
+                success: false,
+                error:
+                    "Cette adresse email est déjà utilisée."
+            });
+        }
+
+        if (
+            findAccountByUsername(username)
+        ) {
+            return res.status(409).json({
+                success: false,
+                error:
+                    "Ce nom d'utilisateur est déjà utilisé."
+            });
+        }
+
+        const account = {
+            id: makeId("account"),
+            email,
+            passwordHash:
+                hashPassword(password),
+            username:
+                normalizeUsername(username),
+            displayName:
+                displayNameFromUsername(
+                    username
+                ),
+            avatar:
+                getAvatar(username),
+            createdAt: Date.now()
+        };
+
+        accountsDB.accounts.push(account);
+
+        saveAccounts();
+
+        return res.status(201).json({
+            success: true,
+            message:
+                "Compte créé avec succès.",
+            user:
+                publicAccount(account)
+        });
+
+    } catch (error) {
+        console.error(
+            "Erreur création compte :",
+            error
         );
 
-        if (emailExists) {
-            return res.status(400).json({
-                error: "Cette adresse email est déjà utilisée."
-            });
-        }
-
-        const userId = id();
-
-        const user = {
-            id: userId,
-            email: email.toLowerCase(),
-            username,
-            displayName: displayName || username,
-            password: hashPassword(password),
-            avatar: null,
-            createdAt: Date.now()
-        };
-
-        db.users[userId] = user;
-        db.friendships[userId] = [];
-
-        createDefaultServer(userId, "Mon serveur");
-
-        const token = id();
-
-        db.sessions[token] = {
-            userId,
-            createdAt: Date.now()
-        };
-
-        saveDatabase();
-
-        res.json({
-            success: true,
-            token,
-            user: cleanUser(user)
-        });
-    } catch (error) {
-        console.error(error);
-
-        res.status(500).json({
-            error: "Erreur lors de la création du compte."
+        return res.status(500).json({
+            success: false,
+            error:
+                "Une erreur est survenue lors de la création du compte."
         });
     }
 });
+
+/*
+LOGIN
+*/
 
 app.post("/api/login", (req, res) => {
     try {
-        const { email, password } = req.body;
+        const email =
+            normalizeEmail(req.body.email);
+
+        const password =
+            String(req.body.password || "");
 
         if (!email || !password) {
             return res.status(400).json({
-                error: "Email et mot de passe obligatoires."
+                success: false,
+                error:
+                    "Email et mot de passe obligatoires."
             });
         }
 
-        const user = Object.values(db.users).find(
-            item => item.email.toLowerCase() === email.toLowerCase()
-        );
+        const account =
+            findAccountByEmail(email);
 
-        if (!user || !checkPassword(password, user.password)) {
+        if (!account) {
             return res.status(401).json({
-                error: "Email ou mot de passe incorrect."
+                success: false,
+                error:
+                    "Email ou mot de passe incorrect."
             });
         }
 
-        const token = id();
+        if (
+            !verifyPassword(
+                password,
+                account.passwordHash
+            )
+        ) {
+            return res.status(401).json({
+                success: false,
+                error:
+                    "Email ou mot de passe incorrect."
+            });
+        }
 
-        db.sessions[token] = {
-            userId: user.id,
-            createdAt: Date.now()
-        };
-
-        saveDatabase();
-
-        res.json({
+        return res.json({
             success: true,
-            token,
-            user: cleanUser(user)
+            message:
+                "Connexion réussie.",
+            user:
+                publicAccount(account)
         });
+
     } catch (error) {
-        console.error(error);
-
-        res.status(500).json({
-            error: "Erreur lors de la connexion."
-        });
-    }
-});
-
-app.get("/api/me", (req, res) => {
-    const user = getUserFromToken(req.headers.authorization);
-
-    if (!user) {
-        return res.status(401).json({
-            error: "Non connecté"
-        });
-    }
-
-    res.json({
-        user: cleanUser(user)
-    });
-});
-
-app.post("/api/logout", (req, res) => {
-    const token = req.headers.authorization;
-
-    if (token) {
-        delete db.sessions[token];
-        saveDatabase();
-    }
-
-    res.json({
-        success: true
-    });
-});
-
-/* =========================
-   PROFIL
-========================= */
-
-app.post("/api/profile", (req, res) => {
-    const user = requireUser(req, res);
-
-    if (!user) return;
-
-    const {
-        displayName,
-        avatar
-    } = req.body;
-
-    if (displayName !== undefined) {
-        const value = String(displayName).trim();
-
-        if (!value || value.length > 32) {
-            return res.status(400).json({
-                error: "Nom d'affichage invalide."
-            });
-        }
-
-        user.displayName = value;
-    }
-
-    if (avatar !== undefined) {
-        if (avatar !== null && typeof avatar !== "string") {
-            return res.status(400).json({
-                error: "Avatar invalide."
-            });
-        }
-
-        user.avatar = avatar;
-    }
-
-    saveDatabase();
-
-    io.emit("user:updated", cleanUser(user));
-
-    res.json({
-        success: true,
-        user: cleanUser(user)
-    });
-});
-
-/* =========================
-   AMIS
-========================= */
-
-app.get("/api/friends", (req, res) => {
-    const user = requireUser(req, res);
-
-    if (!user) return;
-
-    const ids = db.friendships[user.id] || [];
-
-    const friends = ids
-        .map(friendId => db.users[friendId])
-        .filter(Boolean)
-        .map(cleanUser);
-
-    res.json({
-        friends
-    });
-});
-
-app.post("/api/friends/add", (req, res) => {
-    const user = requireUser(req, res);
-
-    if (!user) return;
-
-    const username = String(req.body.username || "").trim();
-
-    if (!username) {
-        return res.status(400).json({
-            error: "Entre un nom d'utilisateur."
-        });
-    }
-
-    const target = getUserByUsername(username);
-
-    if (!target) {
-        return res.status(404).json({
-            error: "Utilisateur introuvable."
-        });
-    }
-
-    if (target.id === user.id) {
-        return res.status(400).json({
-            error: "Tu ne peux pas t'ajouter toi-même."
-        });
-    }
-
-    if (!db.friendships[user.id]) {
-        db.friendships[user.id] = [];
-    }
-
-    if (!db.friendships[target.id]) {
-        db.friendships[target.id] = [];
-    }
-
-    if (!db.friendships[user.id].includes(target.id)) {
-        db.friendships[user.id].push(target.id);
-    }
-
-    if (!db.friendships[target.id].includes(user.id)) {
-        db.friendships[target.id].push(user.id);
-    }
-
-    saveDatabase();
-
-    res.json({
-        success: true,
-        friend: cleanUser(target)
-    });
-});
-
-/* =========================
-   SERVEURS
-========================= */
-
-app.get("/api/servers", (req, res) => {
-    const user = requireUser(req, res);
-
-    if (!user) return;
-
-    const servers = Object.values(db.servers)
-        .filter(serverData =>
-            serverData.members.includes(user.id)
-        )
-        .map(publicServer);
-
-    res.json({
-        servers
-    });
-});
-
-app.post("/api/servers", (req, res) => {
-    const user = requireUser(req, res);
-
-    if (!user) return;
-
-    const name = String(req.body.name || "").trim();
-
-    if (!name) {
-        return res.status(400).json({
-            error: "Nom du serveur obligatoire."
-        });
-    }
-
-    if (name.length > 50) {
-        return res.status(400).json({
-            error: "Nom du serveur trop long."
-        });
-    }
-
-    const serverData = createDefaultServer(user.id, name);
-
-    saveDatabase();
-
-    res.json({
-        success: true,
-        server: publicServer(serverData)
-    });
-});
-
-app.post("/api/servers/join", (req, res) => {
-    const user = requireUser(req, res);
-
-    if (!user) return;
-
-    const serverId = String(req.body.serverId || "");
-
-    const serverData = db.servers[serverId];
-
-    if (!serverData) {
-        return res.status(404).json({
-            error: "Serveur introuvable."
-        });
-    }
-
-    if (!serverData.members.includes(user.id)) {
-        serverData.members.push(user.id);
-        saveDatabase();
-    }
-
-    res.json({
-        success: true,
-        server: publicServer(serverData)
-    });
-});
-
-app.post("/api/servers/:serverId/channels", (req, res) => {
-    const user = requireUser(req, res);
-
-    if (!user) return;
-
-    const serverData = db.servers[req.params.serverId];
-
-    if (!serverData) {
-        return res.status(404).json({
-            error: "Serveur introuvable."
-        });
-    }
-
-    if (!serverData.members.includes(user.id)) {
-        return res.status(403).json({
-            error: "Tu n'es pas membre de ce serveur."
-        });
-    }
-
-    if (serverData.ownerId !== user.id) {
-        return res.status(403).json({
-            error: "Seul le propriétaire peut créer un salon."
-        });
-    }
-
-    const name = String(req.body.name || "").trim();
-    const type = req.body.type === "voice" ? "voice" : "text";
-
-    if (!name) {
-        return res.status(400).json({
-            error: "Nom du salon obligatoire."
-        });
-    }
-
-    const channel = {
-        id: id(),
-        name,
-        type
-    };
-
-    serverData.channels.push(channel);
-
-    saveDatabase();
-
-    res.json({
-        success: true,
-        channel
-    });
-});
-
-/* =========================
-   MESSAGES
-========================= */
-
-app.get("/api/dm/:userId", (req, res) => {
-    const user = requireUser(req, res);
-
-    if (!user) return;
-
-    const targetId = req.params.userId;
-
-    if (!db.users[targetId]) {
-        return res.status(404).json({
-            error: "Utilisateur introuvable."
-        });
-    }
-
-    const key = [user.id, targetId].sort().join("_");
-
-    res.json({
-        messages: db.messages[key] || []
-    });
-});
-
-app.post("/api/dm/:userId", (req, res) => {
-    const user = requireUser(req, res);
-
-    if (!user) return;
-
-    const targetId = req.params.userId;
-    const content = String(req.body.content || "").trim();
-
-    if (!db.users[targetId]) {
-        return res.status(404).json({
-            error: "Utilisateur introuvable."
-        });
-    }
-
-    if (!content) {
-        return res.status(400).json({
-            error: "Message vide."
-        });
-    }
-
-    if (content.length > 2000) {
-        return res.status(400).json({
-            error: "Message trop long."
-        });
-    }
-
-    const key = [user.id, targetId].sort().join("_");
-
-    if (!db.messages[key]) {
-        db.messages[key] = [];
-    }
-
-    const message = {
-        id: id(),
-        from: user.id,
-        to: targetId,
-        content,
-        createdAt: Date.now()
-    };
-
-    db.messages[key].push(message);
-
-    saveDatabase();
-
-    io.to(`user:${targetId}`).emit("dm:new", message);
-    io.to(`user:${user.id}`).emit("dm:new", message);
-
-    res.json({
-        success: true,
-        message
-    });
-});
-
-/* =========================
-   SOCKET.IO
-========================= */
-
-const onlineUsers = new Map();
-
-io.on("connection", socket => {
-    console.log("Connexion Socket.IO:", socket.id);
-
-    socket.on("auth", token => {
-        const user = getUserFromToken(token);
-
-        if (!user) {
-            socket.emit("auth:error");
-            return;
-        }
-
-        socket.userId = user.id;
-        socket.join(`user:${user.id}`);
-
-        onlineUsers.set(user.id, socket.id);
-
-        io.emit("presence:update", {
-            userId: user.id,
-            online: true
-        });
-    });
-
-    /* DM */
-
-    socket.on("dm:send", data => {
-        if (!socket.userId) return;
-
-        const targetId = String(data?.targetId || "");
-        const content = String(data?.content || "").trim();
-
-        if (!targetId || !content) return;
-
-        const user = db.users[socket.userId];
-        const target = db.users[targetId];
-
-        if (!user || !target) return;
-
-        const key = [user.id, target.id].sort().join("_");
-
-        if (!db.messages[key]) {
-            db.messages[key] = [];
-        }
-
-        const message = {
-            id: id(),
-            from: user.id,
-            to: target.id,
-            content,
-            createdAt: Date.now()
-        };
-
-        db.messages[key].push(message);
-        saveDatabase();
-
-        io.to(`user:${user.id}`).emit("dm:new", message);
-
-        io.to(`user:${target.id}`).emit("dm:new", message);
-    });
-
-    /* =====================
-       WEBRTC CALL SIGNALING
-    ===================== */
-
-    socket.on("call:request", data => {
-        if (!socket.userId) return;
-
-        const targetId = String(data?.targetId || "");
-
-        if (!targetId) return;
-
-        const targetSocket = onlineUsers.get(targetId);
-
-        if (!targetSocket) {
-            socket.emit("call:unavailable", {
-                targetId
-            });
-
-            return;
-        }
-
-        io.to(targetSocket).emit("call:incoming", {
-            fromUser: cleanUser(db.users[socket.userId]),
-            callId: data.callId || id()
-        });
-    });
-
-    socket.on("call:accept", data => {
-        if (!socket.userId) return;
-
-        const targetId = String(data?.targetId || "");
-        const targetSocket = onlineUsers.get(targetId);
-
-        if (!targetSocket) return;
-
-        io.to(targetSocket).emit("call:accepted", {
-            fromUser: cleanUser(db.users[socket.userId])
-        });
-    });
-
-    socket.on("call:reject", data => {
-        if (!socket.userId) return;
-
-        const targetId = String(data?.targetId || "");
-        const targetSocket = onlineUsers.get(targetId);
-
-        if (!targetSocket) return;
-
-        io.to(targetSocket).emit("call:rejected", {
-            fromUser: cleanUser(db.users[socket.userId])
-        });
-    });
-
-    socket.on("call:end", data => {
-        if (!socket.userId) return;
-
-        const targetId = String(data?.targetId || "");
-        const targetSocket = onlineUsers.get(targetId);
-
-        if (!targetSocket) return;
-
-        io.to(targetSocket).emit("call:ended", {
-            fromUser: cleanUser(db.users[socket.userId])
-        });
-    });
-
-    /* WebRTC offer */
-
-    socket.on("webrtc:offer", data => {
-        if (!socket.userId) return;
-
-        const targetId = String(data?.targetId || "");
-        const targetSocket = onlineUsers.get(targetId);
-
-        if (!targetSocket) return;
-
-        io.to(targetSocket).emit("webrtc:offer", {
-            fromUserId: socket.userId,
-            offer: data.offer
-        });
-    });
-
-    /* WebRTC answer */
-
-    socket.on("webrtc:answer", data => {
-        if (!socket.userId) return;
-
-        const targetId = String(data?.targetId || "");
-        const targetSocket = onlineUsers.get(targetId);
-
-        if (!targetSocket) return;
-
-        io.to(targetSocket).emit("webrtc:answer", {
-            fromUserId: socket.userId,
-            answer: data.answer
-        });
-    });
-
-    /* ICE */
-
-    socket.on("webrtc:ice", data => {
-        if (!socket.userId) return;
-
-        const targetId = String(data?.targetId || "");
-        const targetSocket = onlineUsers.get(targetId);
-
-        if (!targetSocket) return;
-
-        io.to(targetSocket).emit("webrtc:ice", {
-            fromUserId: socket.userId,
-            candidate: data.candidate
-        });
-    });
-
-    /* =====================
-       VOICE CHANNEL
-    ===================== */
-
-    socket.on("voice:join", data => {
-        if (!socket.userId) return;
-
-        const serverId = String(data?.serverId || "");
-        const channelId = String(data?.channelId || "");
-
-        const serverData = db.servers[serverId];
-
-        if (!serverData) return;
-
-        if (!serverData.members.includes(socket.userId)) {
-            return;
-        }
-
-        const channel = serverData.channels.find(
-            item => item.id === channelId && item.type === "voice"
+        console.error(
+            "Erreur connexion :",
+            error
         );
 
-        if (!channel) return;
-
-        socket.join(`voice:${channelId}`);
-
-        socket.voiceChannel = channelId;
-        socket.voiceServer = serverId;
-
-        const user = cleanUser(db.users[socket.userId]);
-
-        socket.to(`voice:${channelId}`).emit(
-            "voice:user-joined",
-            user
-        );
-
-        const room = io.sockets.adapter.rooms.get(
-            `voice:${channelId}`
-        );
-
-        const users = [];
-
-        if (room) {
-            for (const socketId of room) {
-                const otherSocket = io.sockets.sockets.get(socketId);
-
-                if (
-                    otherSocket &&
-                    otherSocket.userId &&
-                    otherSocket.userId !== socket.userId
-                ) {
-                    const otherUser = db.users[otherSocket.userId];
-
-                    if (otherUser) {
-                        users.push(cleanUser(otherUser));
-                    }
-                }
-            }
-        }
-
-        socket.emit("voice:users", users);
-    });
-
-    socket.on("voice:leave", () => {
-        leaveVoice(socket);
-    });
-
-    socket.on("voice:signal", data => {
-        if (!socket.userId) return;
-
-        const targetSocketId = String(data?.targetSocketId || "");
-
-        if (!targetSocketId) return;
-
-        const targetSocket = io.sockets.sockets.get(
-            targetSocketId
-        );
-
-        if (!targetSocket) return;
-
-        targetSocket.emit("voice:signal", {
-            fromSocketId: socket.id,
-            data: data.data
+        return res.status(500).json({
+            success: false,
+            error:
+                "Une erreur est survenue lors de la connexion."
         });
-    });
-
-    socket.on("disconnect", () => {
-        if (socket.userId) {
-            if (socket.voiceChannel) {
-                leaveVoice(socket);
-            }
-
-            onlineUsers.delete(socket.userId);
-
-            io.emit("presence:update", {
-                userId: socket.userId,
-                online: false
-            });
-        }
-
-        console.log("Déconnexion Socket.IO:", socket.id);
-    });
+    }
 });
-
-function leaveVoice(socket) {
-    const channelId = socket.voiceChannel;
-
-    if (!channelId) return;
-
-    const user = db.users[socket.userId];
-
-    socket.leave(`voice:${channelId}`);
-
-    socket.to(`voice:${channelId}`).emit(
-        "voice:user-left",
-        user ? cleanUser(user) : {
-            id: socket.userId
-        }
-    );
-
-    socket.voiceChannel = null;
-    socket.voiceServer = null;
-}
 
 /*
- * Express 5 :
- * NE PAS utiliser app.get("*").
- *
- * Cette route fonctionne avec Express 5.
- */
-app.use((req, res) => {
-    res.sendFile(
-        path.join(__dirname, "public", "index.html")
-    );
+CHECK ACCOUNT
+*/
+
+app.post("/api/check-account", (req, res) => {
+    const email =
+        normalizeEmail(req.body.email);
+
+    const username =
+        normalizeUsername(
+            req.body.username
+        );
+
+    return res.json({
+        emailAvailable:
+            email
+                ? !findAccountByEmail(email)
+                : false,
+
+        usernameAvailable:
+            username
+                ? !findAccountByUsername(username)
+                : false
+    });
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-    console.log(`NovaChat démarré sur le port ${PORT}`);
+/* =========================================================
+   WEBSOCKET
+========================================================= */
+
+const wss = new WebSocket.Server({
+    server
 });
+
+const clients = new Map();
+
+/* =========================================================
+   WEBSOCKET HELPERS
+========================================================= */
+
+function wsSend(ws, data) {
+    if (
+        ws &&
+        ws.readyState === WebSocket.OPEN
+    ) {
+        try {
+            ws.send(
+                JSON.stringify(data)
+            );
+        } catch (error) {
+            console.error(
+                "Erreur envoi WebSocket :",
+                error
+            );
+        }
+    }
+}
+
+function wsBroadcast(
+    data,
+    except = null
+) {
+    for (
+        const client of clients.values()
+    ) {
+        if (client.ws !== except) {
+            wsSend(client.ws, data);
+        }
+    }
+}
+
+function onlineUsers() {
+    return Array.from(
+        clients.values()
+    ).map(client => ({
+        id: client.id,
+        accountId: client.accountId,
+        username: client.username,
+        displayName:
+            client.displayName,
+        avatar: client.avatar,
+        voiceRoom:
+            client.voiceRoom
+    }));
+}
+
+function broadcastPresence() {
+    wsBroadcast({
+        type: "presence",
+        users: onlineUsers()
+    });
+}
+
+/* =========================================================
+   WEBSOCKET CONNECTION
+========================================================= */
+
+wss.on("connection", ws => {
+
+    let client = null;
+
+    ws.isAlive = true;
+
+    ws.on("pong", () => {
+        ws.isAlive = true;
+    });
+
+    ws.on("message", raw => {
+
+        let data;
+
+        try {
+            data = JSON.parse(
+                raw.toString()
+            );
+        } catch {
+            wsSend(ws, {
+                type: "error-message",
+                message:
+                    "Message invalide."
+            });
+
+            return;
+        }
+
+        if (
+            !data ||
+            typeof data !== "object"
+        ) {
+            return;
+        }
+
+        const type =
+            String(data.type || "");
+
+        /* =================================================
+           AUTH VIA WEBSOCKET
+        ================================================= */
+
+        /*
+         Certaines versions de ton index.html
+         peuvent utiliser WebSocket directement
+         pour créer le compte.
+        */
+
+        if (
+            type === "register" ||
+            type === "create-account" ||
+            type === "signup"
+        ) {
+
+            const email =
+                normalizeEmail(
+                    data.email
+                );
+
+            const password =
+                String(
+                    data.password || ""
+                );
+
+            const username =
+                cleanText(
+                    data.username ||
+                    data.nomUtilisateur ||
+                    data.name,
+                    32
+                );
+
+            if (
+                !email ||
+                !password ||
+                !username
+            ) {
+                wsSend(ws, {
+                    type:
+                        "register-error",
+                    success: false,
+                    error:
+                        "Tous les champs sont obligatoires."
+                });
+
+                return;
+            }
+
+            if (password.length < 6) {
+                wsSend(ws, {
+                    type:
+                        "register-error",
+                    success: false,
+                    error:
+                        "Le mot de passe doit contenir au moins 6 caractères."
+                });
+
+                return;
+            }
+
+            if (
+                findAccountByEmail(email)
+            ) {
+                wsSend(ws, {
+                    type:
+                        "register-error",
+                    success: false,
+                    error:
+                        "Cette adresse email est déjà utilisée."
+                });
+
+                return;
+            }
+
+            if (
+                findAccountByUsername(
+                    username
+                )
+            ) {
+                wsSend(ws, {
+                    type:
+                        "register-error",
+                    success: false,
+                    error:
+                        "Ce nom d'utilisateur est déjà utilisé."
+                });
+
+                return;
+            }
+
+            const account = {
+                id: makeId("account"),
+                email,
+                passwordHash:
+                    hashPassword(
+                        password
+                    ),
+                username:
+                    normalizeUsername(
+                        username
+                    ),
+                displayName:
+                    displayNameFromUsername(
+                        username
+                    ),
+                avatar:
+                    getAvatar(username),
+                createdAt: Date.now()
+            };
+
+            accountsDB.accounts.push(
+                account
+            );
+
+            saveAccounts();
+
+            wsSend(ws, {
+                type:
+                    "register-success",
+                success: true,
+                user:
+                    publicAccount(
+                        account
+                    )
+            });
+
+            return;
+        }
+
+        /*
+        LOGIN WEBSOCKET
+        */
+
+        if (
+            type === "login-account" ||
+            type === "account-login"
+        ) {
+
+            const email =
+                normalizeEmail(
+                    data.email
+                );
+
+            const password =
+                String(
+                    data.password || ""
+                );
+
+            const account =
+                findAccountByEmail(
+                    email
+                );
+
+            if (
+                !account ||
+                !verifyPassword(
+                    password,
+                    account.passwordHash
+                )
+            ) {
+                wsSend(ws, {
+                    type:
+                        "login-error",
+                    success: false,
+                    error:
+                        "Email ou mot de passe incorrect."
+                });
+
+                return;
+            }
+
+            wsSend(ws, {
+                type:
+                    "login-account-success",
+                success: true,
+                user:
+                    publicAccount(
+                        account
+                    )
+            });
+
+            return;
+        }
+
+        /* =================================================
+           LOGIN CHAT
+        ================================================= */
+
+        if (type === "login") {
+
+            if (client) {
+                return;
+            }
+
+            const accountId =
+                String(
+                    data.accountId || ""
+                );
+
+            const account =
+                accountsDB.accounts.find(
+                    item =>
+                        item.id === accountId
+                );
+
+            if (!account) {
+
+                /*
+                 * Compatibilité avec l'ancien
+                 * système qui envoyait seulement
+                 * un username.
+                 */
+
+                const username =
+                    cleanText(
+                        data.username,
+                        32
+                    );
+
+                if (!username) {
+                    wsSend(ws, {
+                        type:
+                            "error-message",
+                        message:
+                            "Compte introuvable."
+                    });
+
+                    return;
+                }
+
+                client = {
+                    id: makeId("session"),
+                    accountId: null,
+                    username:
+                        username
+                            .toLowerCase(),
+                    displayName:
+                        username,
+                    avatar:
+                        getAvatar(username),
+                    ws,
+                    voiceRoom: null
+                };
+
+            } else {
+
+                client = {
+                    id: makeId("session"),
+                    accountId:
+                        account.id,
+                    username:
+                        account.username,
+                    displayName:
+                        account.displayName,
+                    avatar:
+                        account.avatar,
+                    ws,
+                    voiceRoom: null
+                };
+            }
+
+            clients.set(
+                client.id,
+                client
+            );
+
+            wsSend(ws, {
+                type:
+                    "login-success",
+                success: true,
+                user: {
+                    id: client.id,
+                    accountId:
+                        client.accountId,
+                    username:
+                        client.username,
+                    displayName:
+                        client.displayName,
+                    avatar:
+                        client.avatar
+                }
+            });
+
+            wsSend(ws, {
+                type: "history",
+                channel: "general",
+                messages:
+                    chatDB.channels.general
+            });
+
+            broadcastPresence();
+
+            return;
+        }
+
+        /* =================================================
+           PROTECTION
+        ================================================= */
+
+        if (!client) {
+            wsSend(ws, {
+                type:
+                    "error-message",
+                message:
+                    "Connecte-toi d'abord."
+            });
+
+            return;
+        }
+
+        /* =================================================
+           MESSAGE
+        ================================================= */
+
+        if (type === "message") {
+
+            const channel =
+                cleanText(
+                    data.channel ||
+                    "general",
+                    100
+                ) || "general";
+
+            if (
+                !chatDB.channels[channel]
+            ) {
+                chatDB.channels[channel] =
+                    [];
+            }
+
+            const content =
+                String(
+                    data.content || ""
+                )
+                    .trim()
+                    .substring(
+                        0,
+                        4000
+                    );
+
+            if (!content) {
+                return;
+            }
+
+            const message = {
+                id: makeId("message"),
+                channel,
+                userId: client.id,
+                accountId:
+                    client.accountId,
+                username:
+                    client.username,
+                displayName:
+                    client.displayName,
+                avatar:
+                    client.avatar,
+                content,
+                time: Date.now(),
+                reactions: {}
+            };
+
+            chatDB.channels[channel]
+                .push(message);
+
+            if (
+                chatDB.channels[channel]
+                    .length > 500
+            ) {
+                chatDB.channels[channel] =
+                    chatDB.channels[
+                        channel
+                    ].slice(-500);
+            }
+
+            saveChat();
+
+            wsBroadcast({
+                type:
+                    "new-message",
+                message
+            });
+
+            return;
+        }
+
+        /* =================================================
+           HISTORY
+        ================================================= */
+
+        if (type === "history") {
+
+            const channel =
+                cleanText(
+                    data.channel ||
+                    "general",
+                    100
+                ) || "general";
+
+            if (
+                !chatDB.channels[channel]
+            ) {
+                chatDB.channels[channel] =
+                    [];
+            }
+
+            wsSend(ws, {
+                type: "history",
+                channel,
+                messages:
+                    chatDB.channels[
+                        channel
+                    ]
+            });
+
+            return;
+        }
+
+        /* =================================================
+           PRIVATE MESSAGE
+        ================================================= */
+
+        if (
+            type === "private-message"
+        ) {
+
+            const receiverId =
+                String(
+                    data.receiverId ||
+                    data.userId ||
+                    ""
+                );
+
+            const content =
+                String(
+                    data.content || ""
+                )
+                    .trim()
+                    .substring(
+                        0,
+                        4000
+                    );
+
+            if (
+                !receiverId ||
+                !content
+            ) {
+                return;
+            }
+
+            const receiver =
+                clients.get(
+                    receiverId
+                );
+
+            if (!receiver) {
+                wsSend(ws, {
+                    type:
+                        "error-message",
+                    message:
+                        "Cette personne n'est pas connectée."
+                });
+
+                return;
+            }
+
+            const key =
+                [
+                    client.id,
+                    receiver.id
+                ]
+                    .sort()
+                    .join("_");
+
+            if (
+                !chatDB.privateMessages[
+                    key
+                ]
+            ) {
+                chatDB.privateMessages[
+                    key
+                ] = [];
+            }
+
+            const message = {
+                id: makeId("dm"),
+                senderId:
+                    client.id,
+                receiverId:
+                    receiver.id,
+                senderName:
+                    client.username,
+                senderDisplayName:
+                    client.displayName,
+                content,
+                time: Date.now()
+            };
+
+            chatDB.privateMessages[
+                key
+            ].push(message);
+
+            saveChat();
+
+            wsSend(
+                receiver.ws,
+                {
+                    type:
+                        "private-message",
+                    message
+                }
+            );
+
+            wsSend(
+                ws,
+                {
+                    type:
+                        "private-message",
+                    message
+                }
+            );
+
+            return;
+        }
+
+        /* =================================================
+           PRIVATE HISTORY
+        ================================================= */
+
+        if (
+            type === "private-history"
+        ) {
+
+            const receiverId =
+                String(
+                    data.receiverId ||
+                    data.userId ||
+                    ""
+                );
+
+            if (!receiverId) {
+                return;
+            }
+
+            const key =
+                [
+                    client.id,
+                    receiverId
+                ]
+                    .sort()
+                    .join("_");
+
+            wsSend(ws, {
+                type:
+                    "private-history",
+                receiverId,
+                messages:
+                    chatDB.privateMessages[
+                        key
+                    ] || []
+            });
+
+            return;
+        }
+
+        /* =================================================
+           VOICE JOIN
+        ================================================= */
+
+        if (
+            type === "voice-join"
+        ) {
+
+            const room =
+                cleanText(
+                    data.room ||
+                    "general",
+                    100
+                );
+
+            if (!room) {
+                return;
+            }
+
+            if (client.voiceRoom) {
+                wsBroadcast({
+                    type:
+                        "voice-user-left",
+                    room:
+                        client.voiceRoom,
+                    userId:
+                        client.id
+                });
+            }
+
+            client.voiceRoom = room;
+
+            const peers = [];
+
+            for (
+                const other of clients.values()
+            ) {
+                if (
+                    other.id !==
+                        client.id &&
+                    other.voiceRoom ===
+                        room
+                ) {
+                    peers.push({
+                        id:
+                            other.id,
+                        username:
+                            other.username,
+                        displayName:
+                            other.displayName,
+                        avatar:
+                            other.avatar
+                    });
+                }
+            }
+
+            wsSend(ws, {
+                type:
+                    "voice-peers",
+                room,
+                peers
+            });
+
+            wsBroadcast(
+                {
+                    type:
+                        "voice-user-joined",
+                    room,
+                    user: {
+                        id:
+                            client.id,
+                        username:
+                            client.username,
+                        displayName:
+                            client.displayName,
+                        avatar:
+                            client.avatar
+                    }
+                },
+                ws
+            );
+
+            broadcastPresence();
+
+            return;
+        }
+
+        /* =================================================
+           VOICE LEAVE
+        ================================================= */
+
+        if (
+            type === "voice-leave"
+        ) {
+
+            if (!client.voiceRoom) {
+                return;
+            }
+
+            const room =
+                client.voiceRoom;
+
+            client.voiceRoom = null;
+
+            wsBroadcast({
+                type:
+                    "voice-user-left",
+                room,
+                userId:
+                    client.id
+            });
+
+            broadcastPresence();
+
+            return;
+        }
+
+        /* =================================================
+           WEBRTC OFFER
+        ================================================= */
+
+        if (
+            type === "webrtc-offer"
+        ) {
+
+            const targetId =
+                String(
+                    data.targetId ||
+                    data.userId ||
+                    ""
+                );
+
+            const target =
+                clients.get(
+                    targetId
+                );
+
+            if (!target) {
+                return;
+            }
+
+            if (
+                client.voiceRoom &&
+                target.voiceRoom &&
+                client.voiceRoom ===
+                    target.voiceRoom
+            ) {
+                wsSend(
+                    target.ws,
+                    {
+                        type:
+                            "webrtc-offer",
+                        senderId:
+                            client.id,
+                        senderName:
+                            client.displayName,
+                        offer:
+                            data.offer
+                    }
+                );
+            }
+
+            return;
+        }
+
+        /* =================================================
+           WEBRTC ANSWER
+        ================================================= */
+
+        if (
+            type === "webrtc-answer"
+        ) {
+
+            const targetId =
+                String(
+                    data.targetId ||
+                    data.userId ||
+                    ""
+                );
+
+            const target =
+                clients.get(
+                    targetId
+                );
+
+            if (!target) {
+                return;
+            }
+
+            wsSend(
+                target.ws,
+                {
+                    type:
+                        "webrtc-answer",
+                    senderId:
+                        client.id,
+                    senderName:
+                        client.displayName,
+                    answer:
+                        data.answer
+                }
+            );
+
+            return;
+        }
+
+        /* =================================================
+           WEBRTC ICE
+        ================================================= */
+
+        if (
+            type === "webrtc-ice"
+        ) {
+
+            const targetId =
+                String(
+                    data.targetId ||
+                    data.userId ||
+                    ""
+                );
+
+            const target =
+                clients.get(
+                    targetId
+                );
+
+            if (!target) {
+                return;
+            }
+
+            wsSend(
+                target.ws,
+                {
+                    type:
+                        "webrtc-ice",
+                    senderId:
+                        client.id,
+                    senderName:
+                        client.displayName,
+                    candidate:
+                        data.candidate
+                }
+            );
+
+            return;
+        }
+
+        /* =================================================
+           PING
+        ================================================= */
+
+        if (type === "ping") {
+            wsSend(ws, {
+                type: "pong"
+            });
+        }
+    });
+
+    /* =====================================================
+       DISCONNECT
+    ===================================================== */
+
+    ws.on("close", () => {
+
+        if (!client) {
+            return;
+        }
+
+        if (client.voiceRoom) {
+            wsBroadcast({
+                type:
+                    "voice-user-left",
+                room:
+                    client.voiceRoom,
+                userId:
+                    client.id
+            });
+        }
+
+        clients.delete(
+            client.id
+        );
+
+        broadcastPresence();
+    });
+
+    ws.on("error", error => {
+        console.error(
+            "Erreur WebSocket :",
+            error.message
+        );
+    });
+});
+
+/* =========================================================
+   HEARTBEAT
+========================================================= */
+
+const heartbeat =
+    setInterval(() => {
+
+        for (
+            const ws of wss.clients
+        ) {
+
+            if (
+                ws.isAlive === false
+            ) {
+                ws.terminate();
+                continue;
+            }
+
+            ws.isAlive = false;
+
+            try {
+                ws.ping();
+            } catch {
+                // connexion déjà fermée
+            }
+        }
+
+    }, 30000);
+
+wss.on("close", () => {
+    clearInterval(heartbeat);
+});
+
+/* =========================================================
+   SHUTDOWN
+========================================================= */
+
+function shutdown() {
+
+    console.log(
+        "Arrêt de NovaChat..."
+    );
+
+    saveAccounts();
+    saveChat();
+
+    for (
+        const client of clients.values()
+    ) {
+        try {
+            client.ws.close();
+        } catch {
+            // rien
+        }
+    }
+
+    server.close(() => {
+        process.exit(0);
+    });
+}
+
+process.on(
+    "SIGINT",
+    shutdown
+);
+
+process.on(
+    "SIGTERM",
+    shutdown
+);
+
+/* =========================================================
+   START
+========================================================= */
+
+server.listen(
+    PORT,
+    "0.0.0.0",
+    () => {
+
+        console.log("");
+        console.log(
+            "======================================"
+        );
+        console.log(
+            "          NOVACHAT SERVEUR"
+        );
+        console.log(
+            "======================================"
+        );
+        console.log(
+            "Port : " + PORT
+        );
+        console.log(
+            "WebSocket : OK"
+        );
+        console.log(
+            "Comptes : OK"
+        );
+        console.log(
+            "Database : OK"
+        );
+        console.log(
+            "======================================"
+        );
+        console.log("");
+    }
+);
